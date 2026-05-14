@@ -3,13 +3,22 @@
 import { useEffect, useRef, useState } from 'react';
 import JSZip from 'jszip';
 import { saveAs } from 'file-saver';
+import {
+  TIPOS_PROPUESTA,
+  TIPOS_PROPUESTA_LIST,
+  type TipoPropuestaId,
+} from '@/lib/tipos-propuesta';
 
 // ═══════════════════════════════════════════════════════════════════════
-// TIPOS
+// TIPOS LOCALES
 // ═══════════════════════════════════════════════════════════════════════
-type TipoPropuesta = 'socios' | 'lgd' | 'general';
-
-type LineaKey = 'reclutamiento' | 'lgd' | 'voluntariado' | 'sensibilizacion' | 'comunicacion' | 'esg';
+type LineaKey =
+  | 'reclutamiento'
+  | 'lgd'
+  | 'voluntariado'
+  | 'sensibilizacion'
+  | 'comunicacion'
+  | 'esg';
 
 type DatosGeneracion = {
   nombre: string;
@@ -21,7 +30,7 @@ type DatosGeneracion = {
   importe: string;
   via: string;
   lineas: string[];
-  tipo: TipoPropuesta;
+  tipo: TipoPropuestaId;
 };
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -51,7 +60,10 @@ const PASSWORD_STORAGE_KEY = 'integra_app_password';
 // HELPERS
 // ═══════════════════════════════════════════════════════════════════════
 function xmlEscape(s: string): string {
-  return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return String(s || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
 }
 
 function normalizarImporte(raw: string): string {
@@ -62,18 +74,45 @@ function normalizarImporte(raw: string): string {
   return s;
 }
 
+/**
+ * Parser de markdown-style negritas para inyectar en Word.
+ *
+ * Toma un texto como "Hola **mundo** y **adiós**" + las propiedades base de
+ * formato del párrafo, y devuelve una cadena XML con <w:r> alternados que
+ * representan los tramos normales y los tramos en negrita.
+ *
+ * Las negritas heredan EXACTAMENTE las mismas propiedades que el texto base
+ * (tipografía, color, tamaño) y solo añaden <w:b/>.
+ *
+ * Texto sin negritas → un único <w:r> con el texto.
+ * Texto con negritas → secuencia de <w:r> alternados.
+ */
+function buildRunsConNegritas(texto: string, propsBase: string): string {
+  // Split por **...** capturando los grupos. `partes` será un array como:
+  // ["Hola ", "mundo", " y ", "adiós", ""] donde índices impares son negritas.
+  const partes = texto.split(/\*\*(.+?)\*\*/g);
+  return partes
+    .map((parte, i) => {
+      if (!parte) return '';
+      const isBold = i % 2 === 1;
+      const rPr = isBold ? `${propsBase}<w:b/><w:bCs/>` : propsBase;
+      return `<w:r><w:rPr>${rPr}</w:rPr><w:t xml:space="preserve">${xmlEscape(parte)}</w:t></w:r>`;
+    })
+    .join('');
+}
+
 // ═══════════════════════════════════════════════════════════════════════
 // COMPONENTE PRINCIPAL
 // ═══════════════════════════════════════════════════════════════════════
 export default function Home() {
   // ── Auth gate ──
-  const [authed, setAuthed] = useState<boolean | null>(null); // null = checking
+  const [authed, setAuthed] = useState<boolean | null>(null);
   const [passwordInput, setPasswordInput] = useState('');
   const [authError, setAuthError] = useState('');
   const [authLoading, setAuthLoading] = useState(false);
 
   // ── Datos formulario ──
-  const [tipo, setTipo] = useState<TipoPropuesta>('socios');
+  const [tipo, setTipo] = useState<TipoPropuestaId>('socios');
   const [nombre, setNombre] = useState('');
   const [sector, setSector] = useState('');
   const [tamano, setTamano] = useState('');
@@ -95,7 +134,8 @@ export default function Home() {
   const [logoFilename, setLogoFilename] = useState<string>('');
 
   // ── Estado generación ──
-  const [plantillaBytes, setPlantillaBytes] = useState<Uint8Array | null>(null);
+  // Cacheamos las plantillas por ruta para no volver a descargarlas cada vez.
+  const [plantillasCache, setPlantillasCache] = useState<Record<string, Uint8Array>>({});
   const [plantillaError, setPlantillaError] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -142,22 +182,30 @@ export default function Home() {
   }, []);
 
   // ─────────────────────────────────────────────────────────────────
-  // EFECTO: Cargar la plantilla .docx cuando el usuario está autenticado
+  // EFECTO: Precargar la plantilla del tipo actual cuando se autentica
+  // o cuando el usuario cambia de tipo.
+  //
+  // No bloqueamos la UI: si al pulsar "Descargar" la plantilla aún no
+  // ha llegado, la descargamos en ese momento.
   // ─────────────────────────────────────────────────────────────────
   useEffect(() => {
     if (!authed) return;
+    const ruta = TIPOS_PROPUESTA[tipo].plantilla;
+    if (plantillasCache[ruta]) return; // ya cacheada
+
     (async () => {
       try {
-        const res = await fetch('/plantilla-integra.docx');
+        const res = await fetch(ruta);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const buf = await res.arrayBuffer();
-        setPlantillaBytes(new Uint8Array(buf));
+        setPlantillasCache((prev) => ({ ...prev, [ruta]: new Uint8Array(buf) }));
+        setPlantillaError('');
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        setPlantillaError(`No se pudo cargar la plantilla: ${msg}`);
+        setPlantillaError(`No se pudo cargar la plantilla (${ruta}): ${msg}`);
       }
     })();
-  }, [authed]);
+  }, [authed, tipo, plantillasCache]);
 
   // ─────────────────────────────────────────────────────────────────
   // HANDLERS: Auth
@@ -201,7 +249,8 @@ export default function Home() {
     setError('');
     const name = (file.name || '').toLowerCase();
     const isPng = file.type === 'image/png' || name.endsWith('.png');
-    const isJpg = file.type === 'image/jpeg' || name.endsWith('.jpg') || name.endsWith('.jpeg');
+    const isJpg =
+      file.type === 'image/jpeg' || name.endsWith('.jpg') || name.endsWith('.jpeg');
     const isSvg = file.type === 'image/svg+xml' || name.endsWith('.svg');
 
     if (!isPng && !isJpg && !isSvg) {
@@ -225,7 +274,9 @@ export default function Home() {
       setLogoBytes(bytes);
       setLogoExt(ext);
       setLogoFilename(file.name);
-      const blob = new Blob([bytes.buffer as ArrayBuffer], { type: ext === 'png' ? 'image/png' : 'image/jpeg' });
+      const blob = new Blob([bytes.buffer as ArrayBuffer], {
+        type: ext === 'png' ? 'image/png' : 'image/jpeg',
+      });
       setLogoPreviewUrl(URL.createObjectURL(blob));
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -293,7 +344,9 @@ export default function Home() {
       return;
     }
 
-    const lineas = LINEAS_LIST.filter((l) => lineasState[l.key]).map((l) => LINEAS_MAP[l.key]);
+    const lineas = LINEAS_LIST.filter((l) => lineasState[l.key]).map(
+      (l) => LINEAS_MAP[l.key],
+    );
 
     const datos: DatosGeneracion = {
       nombre: nombreT,
@@ -346,12 +399,31 @@ export default function Home() {
   }
 
   // ─────────────────────────────────────────────────────────────────
-  // HANDLER: Descargar Word (rellena la plantilla)
+  // HANDLER: Descargar Word (rellena la plantilla del tipo activo)
   // ─────────────────────────────────────────────────────────────────
   async function descargarWord() {
-    if (!textoGenerado || !datosUltima || !plantillaBytes) {
-      setError('Falta la plantilla o los datos. Recarga la página.');
+    if (!textoGenerado || !datosUltima) {
+      setError('Falta el texto generado. Pulsa "Generar propuesta" primero.');
       return;
+    }
+
+    // Usar la plantilla del tipo con el que se generó esta propuesta
+    const rutaPlantilla = TIPOS_PROPUESTA[datosUltima.tipo].plantilla;
+    let plantillaBytes = plantillasCache[rutaPlantilla];
+
+    // Fallback: si no está cacheada, descargarla ahora
+    if (!plantillaBytes) {
+      try {
+        const resP = await fetch(rutaPlantilla);
+        if (!resP.ok) throw new Error(`HTTP ${resP.status}`);
+        const buf = await resP.arrayBuffer();
+        plantillaBytes = new Uint8Array(buf);
+        setPlantillasCache((prev) => ({ ...prev, [rutaPlantilla]: plantillaBytes! }));
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        setError(`No se pudo cargar la plantilla: ${msg}`);
+        return;
+      }
     }
 
     setDownloading(true);
@@ -361,59 +433,109 @@ export default function Home() {
       const zip = await JSZip.loadAsync(plantillaBytes);
       let xml = await zip.file('word/document.xml')!.async('string');
 
-      const mesNombre = new Date().toLocaleDateString('es-ES', { month: 'long' }).toUpperCase();
+      const mesNombre = new Date()
+        .toLocaleDateString('es-ES', { month: 'long' })
+        .toUpperCase();
       const fecha = `${mesNombre} ${new Date().getFullYear()}`;
 
+      // BUG FIX: ambos placeholders de importe usan el mismo fallback consistente.
+      // Antes IMPORTE_CUERPO tenía hardcodeado '10.000€' como fallback, lo que
+      // generaba propuestas con cifras inventadas si el usuario no rellenaba importe.
       const importeFmt = normalizarImporte(d.importe) || 'Por definir';
-      const importeCuerpoFmt = normalizarImporte(d.importe) || '10.000€';
+      const viaFmt = d.via || 'Por definir';
 
       xml = xml.split('{{FECHA}}').join(xmlEscape(fecha));
       xml = xml.split('{{NOMBRE_EMPRESA}}').join(xmlEscape(d.nombre.toUpperCase()));
       xml = xml.split('{{SECTOR}}').join(xmlEscape(d.sector));
       xml = xml.split('{{IMPORTE}}').join(xmlEscape(importeFmt));
-      xml = xml.split('{{VIA}}').join(xmlEscape(d.via || '—'));
-      xml = xml.split('{{IMPORTE_CUERPO}}').join(xmlEscape(importeCuerpoFmt));
-      xml = xml.split('{{VIA_CUERPO}}').join(xmlEscape(d.via || 'Fondos LGD'));
+      xml = xml.split('{{IMPORTE_CUERPO}}').join(xmlEscape(importeFmt));
+      xml = xml.split('{{VIA}}').join(xmlEscape(viaFmt));
+      xml = xml.split('{{VIA_CUERPO}}').join(xmlEscape(viaFmt));
 
-      // TEXTO_OBJETIVO — múltiples párrafos
-      const parrafos = String(textoGenerado).split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean);
-      const objProps = `<w:rFonts w:ascii="Calibri Light" w:cs="Calibri Light" w:eastAsia="Calibri Light" w:hAnsi="Calibri Light"/><w:color w:val="1a1a1a"/><w:sz w:val="22"/>`;
-      const objPara = `<w:spacing w:after="160" w:line="300" w:lineRule="auto"/><w:jc w:val="both"/>`;
-      const textoObjetivoXml = parrafos
-        .map((p, i) =>
-          i === 0
-            ? xmlEscape(p)
-            : `</w:t></w:r></w:p><w:p><w:pPr>${objPara}</w:pPr><w:r><w:rPr>${objProps}</w:rPr><w:t xml:space="preserve">${xmlEscape(p)}`
-        )
-        .join('');
+      // ─── TEXTO_OBJETIVO con soporte de **negritas** ───
+      //
+      // CONTEXTO XML: el placeholder {{TEXTO_OBJETIVO}} vive dentro de
+      // <w:p>...<w:r><w:t>{{TEXTO_OBJETIVO}}</w:t></w:r>...</w:p> en la plantilla.
+      // Lo que escribamos REEMPLAZA el texto, pero los <w:t></w:r></w:p> que
+      // vienen después en la plantilla siguen ahí y los tenemos que respetar.
+      //
+      // ESTRATEGIA (la misma que el código original, ahora con negritas):
+      //  - Párrafo 1 → cerrar <w:t></w:r> del placeholder y meter sus runs.
+      //    El </w:p> de la plantilla cerrará el primer párrafo correctamente.
+      //  - Párrafos siguientes → cerrar también ese </w:p> de la plantilla
+      //    ANTES de abrir un <w:p> nuevo. Si no se cierra, queda <w:p> dentro
+      //    de <w:p> y Word rechaza el archivo entero.
+      //  - Tras el último párrafo, reabrir un <w:r><w:t> vacío para que el
+      //    </w:t></w:r></w:p> que la plantilla tiene al final del placeholder
+      //    cierre correctamente.
+      const objProps =
+        '<w:rFonts w:ascii="Calibri Light" w:cs="Calibri Light" w:eastAsia="Calibri Light" w:hAnsi="Calibri Light"/><w:color w:val="1a1a1a"/><w:sz w:val="22"/>';
+      const objPara =
+        '<w:spacing w:after="160" w:line="300" w:lineRule="auto"/><w:jc w:val="both"/>';
+
+      const parrafos = String(textoGenerado)
+        .split(/\n\s*\n/)
+        .map((p) => p.trim())
+        .filter(Boolean);
+
+      let textoObjetivoXml = '';
+      parrafos.forEach((p, i) => {
+        const runs = buildRunsConNegritas(p, objProps);
+        if (i === 0) {
+          // Cerrar el <w:t></w:r> del placeholder y emitir los runs del primer
+          // párrafo. NO cerramos </w:p> aquí: el </w:p> de la plantilla lo hará.
+          textoObjetivoXml += `</w:t></w:r>${runs}`;
+        } else {
+          // Cerrar el </w:p> del párrafo anterior (que era el de la plantilla
+          // en la primera iteración, o uno que abrimos nosotros después) y
+          // abrir un <w:p> nuevo con sus runs. NO lo cerramos: o lo cerrará
+          // la siguiente iteración o el reapertura final.
+          textoObjetivoXml += `</w:p><w:p><w:pPr>${objPara}</w:pPr>${runs}`;
+        }
+      });
+
+      // Si hubo más de un párrafo, el último quedó "abierto" sin su </w:p>.
+      // Reabrimos un <w:r><w:t> vacío para que la plantilla cierre con su
+      // </w:t></w:r></w:p> de forma natural.
+      if (parrafos.length > 1) {
+        textoObjetivoXml += `<w:r><w:rPr>${objProps}</w:rPr><w:t xml:space="preserve">`;
+      }
+
+      // Caso degenerado: si no había ningún párrafo, no rompemos nada.
+      if (parrafos.length === 0) {
+        textoObjetivoXml = '';
+      }
+
       xml = xml.split('{{TEXTO_OBJETIVO}}').join(textoObjetivoXml);
 
-      // LINEAS — bullets
-      const linProps = `<w:rFonts w:ascii="Calibri Light" w:cs="Calibri Light" w:eastAsia="Calibri Light" w:hAnsi="Calibri Light"/><w:color w:val="1a1a1a"/><w:sz w:val="22"/>`;
-      const linPara = `<w:spacing w:after="100" w:line="280" w:lineRule="auto"/><w:ind w:left="360" w:hanging="200"/>`;
+      // ─── LINEAS — bullets (sin negritas, igual que antes) ───
+      const linProps =
+        '<w:rFonts w:ascii="Calibri Light" w:cs="Calibri Light" w:eastAsia="Calibri Light" w:hAnsi="Calibri Light"/><w:color w:val="1a1a1a"/><w:sz w:val="22"/>';
+      const linPara =
+        '<w:spacing w:after="100" w:line="280" w:lineRule="auto"/><w:ind w:left="360" w:hanging="200"/>';
       const lineasXml = d.lineas
         .map((l, i) =>
           i === 0
             ? xmlEscape(l)
-            : `</w:t></w:r></w:p><w:p><w:pPr>${linPara}</w:pPr><w:r><w:rPr><w:b/><w:color w:val="C73E3A"/><w:sz w:val="22"/></w:rPr><w:t xml:space="preserve">• </w:t></w:r><w:r><w:rPr>${linProps}</w:rPr><w:t xml:space="preserve">${xmlEscape(l)}`
+            : `</w:t></w:r></w:p><w:p><w:pPr>${linPara}</w:pPr><w:r><w:rPr><w:b/><w:color w:val="C73E3A"/><w:sz w:val="22"/></w:rPr><w:t xml:space="preserve">• </w:t></w:r><w:r><w:rPr>${linProps}</w:rPr><w:t xml:space="preserve">${xmlEscape(l)}`,
         )
         .join('');
       xml = xml.split('{{LINEAS}}').join(lineasXml);
 
       zip.file('word/document.xml', xml);
 
-      // Logo de empresa en el header
+      // ─── Logo de empresa en el header ───
       let header = await zip.file('word/header1.xml')!.async('string');
 
       if (logoBytes && logoExt) {
-        const logoFilename = `logo_empresa.${logoExt}`;
-        zip.file(`word/media/${logoFilename}`, logoBytes);
+        const logoMediaFilename = `logo_empresa.${logoExt}`;
+        zip.file(`word/media/${logoMediaFilename}`, logoBytes);
 
         let rels = await zip.file('word/_rels/header1.xml.rels')!.async('string');
-        if (!rels.includes(logoFilename)) {
+        if (!rels.includes(logoMediaFilename)) {
           rels = rels.replace(
             '</Relationships>',
-            `  <Relationship Id="rId99" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/${logoFilename}"/>\n</Relationships>`
+            `  <Relationship Id="rId99" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/${logoMediaFilename}"/>\n</Relationships>`,
           );
           zip.file('word/_rels/header1.xml.rels', rels);
         }
@@ -422,13 +544,23 @@ export default function Home() {
         const cy = 457200;
         const drawingXml = `<w:r><w:rPr><w:noProof/></w:rPr><w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0"><wp:extent cx="${cx}" cy="${cy}"/><wp:effectExtent l="0" t="0" r="0" b="0"/><wp:docPr id="101" name="LogoEmpresa"/><wp:cNvGraphicFramePr><a:graphicFrameLocks xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" noChangeAspect="1"/></wp:cNvGraphicFramePr><a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:nvPicPr><pic:cNvPr id="101" name="LogoEmpresa"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed="rId99"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r>`;
 
-        header = header.replace(/<w:r>(?:(?!<\/w:r>).)*?\{\{LOGO\}\}[^<]*<\/w:t><\/w:r>/, drawingXml);
+        header = header.replace(
+          /<w:r>(?:(?!<\/w:r>).)*?\{\{LOGO\}\}[^<]*<\/w:t><\/w:r>/,
+          drawingXml,
+        );
 
         let ct = await zip.file('[Content_Types].xml')!.async('string');
-        const mimeForExt: Record<string, string> = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg' };
+        const mimeForExt: Record<string, string> = {
+          png: 'image/png',
+          jpg: 'image/jpeg',
+          jpeg: 'image/jpeg',
+        };
         const mt = mimeForExt[logoExt];
         if (mt && !ct.includes(`Extension="${logoExt}"`)) {
-          ct = ct.replace('</Types>', `<Default Extension="${logoExt}" ContentType="${mt}"/></Types>`);
+          ct = ct.replace(
+            '</Types>',
+            `<Default Extension="${logoExt}" ContentType="${mt}"/></Types>`,
+          );
           zip.file('[Content_Types].xml', ct);
         }
       } else {
@@ -439,7 +571,8 @@ export default function Home() {
 
       const blob = await zip.generateAsync({
         type: 'blob',
-        mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        mimeType:
+          'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
       });
       const nombreArchivo = `Propuesta_Integra_${d.nombre.replace(/\s+/g, '_').replace(/[^a-zA-Z0-9_-]/g, '')}.docx`;
       saveAs(blob, nombreArchivo);
@@ -462,12 +595,23 @@ export default function Home() {
     setLineasState((prev) => ({ ...prev, [key]: !prev[key] }));
   }
 
+  // Estado derivado: ¿está la plantilla del tipo activo lista?
+  const plantillaActivaLista = !!plantillasCache[TIPOS_PROPUESTA[tipo].plantilla];
+
   // ═══════════════════════════════════════════════════════════════════
   // RENDER: pantalla de carga inicial
   // ═══════════════════════════════════════════════════════════════════
   if (authed === null) {
     return (
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100vh', fontFamily: "'DM Sans', sans-serif" }}>
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          minHeight: '100vh',
+          fontFamily: "'DM Sans', sans-serif",
+        }}
+      >
         <div className="spinner-ring" />
       </div>
     );
@@ -482,7 +626,9 @@ export default function Home() {
         <form className="login-box" onSubmit={handleLogin}>
           <div className="login-logo">
             <div className="icon-box">
-              <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14H9V8h2v8zm4 0h-2V8h2v8z" /></svg>
+              <svg viewBox="0 0 24 24">
+                <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14H9V8h2v8zm4 0h-2V8h2v8z" />
+              </svg>
             </div>
             <span>Fundación Íntegra</span>
           </div>
@@ -514,59 +660,104 @@ export default function Home() {
         <div>
           <div className="sidebar-logo">
             <div className="icon-box">
-              <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14H9V8h2v8zm4 0h-2V8h2v8z" /></svg>
+              <svg viewBox="0 0 24 24">
+                <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14H9V8h2v8zm4 0h-2V8h2v8z" />
+              </svg>
             </div>
-            <span>Fundación<br />Íntegra</span>
+            <span>
+              Fundación
+              <br />
+              Íntegra
+            </span>
           </div>
           <h2 style={{ marginTop: '2rem' }}>Generador de propuestas</h2>
           <p style={{ marginTop: '.75rem' }}>
-            Rellena los datos, sube el logo de la empresa y descarga la propuesta en Word lista para enviar.
+            Rellena los datos, sube el logo de la empresa y descarga la propuesta en Word
+            lista para enviar.
           </p>
         </div>
 
         <div>
           <p className="step-label">Cómo funciona</p>
           <div className="step-list">
-            <div className="step"><div className="step-num">1</div><div className="step-text"><strong>Elige el tipo</strong> y rellena los datos.</div></div>
-            <div className="step"><div className="step-num">2</div><div className="step-text"><strong>Sube el logo</strong> de la empresa (opcional).</div></div>
-            <div className="step"><div className="step-num">3</div><div className="step-text"><strong>Genera</strong> → la IA redacta la portada.</div></div>
-            <div className="step"><div className="step-num">4</div><div className="step-text"><strong>Descarga el Word</strong> completo.</div></div>
+            <div className="step">
+              <div className="step-num">1</div>
+              <div className="step-text">
+                <strong>Elige el tipo</strong> y rellena los datos.
+              </div>
+            </div>
+            <div className="step">
+              <div className="step-num">2</div>
+              <div className="step-text">
+                <strong>Sube el logo</strong> de la empresa (opcional).
+              </div>
+            </div>
+            <div className="step">
+              <div className="step-num">3</div>
+              <div className="step-text">
+                <strong>Genera</strong> → la IA redacta la portada.
+              </div>
+            </div>
+            <div className="step">
+              <div className="step-num">4</div>
+              <div className="step-text">
+                <strong>Descarga el Word</strong> completo.
+              </div>
+            </div>
           </div>
         </div>
 
         <div className="sidebar-footer">
-          <button className="logout-btn" onClick={handleLogout}>Cerrar sesión</button>
+          <button className="logout-btn" onClick={handleLogout}>
+            Cerrar sesión
+          </button>
           <p>Equipo de Alianzas · Fundación Íntegra</p>
         </div>
       </aside>
 
       {/* MAIN */}
       <main className="main">
-        <div className="section-head"><div className="dot" /><h3>Tipo de propuesta</h3></div>
+        <div className="section-head">
+          <div className="dot" />
+          <h3>Tipo de propuesta</h3>
+        </div>
+        {/* Los tabs se generan automáticamente desde TIPOS_PROPUESTA_LIST.
+            Para añadir un tipo nuevo, basta con añadirlo a lib/tipos-propuesta.ts. */}
         <div className="tipo-tabs">
-          {(['socios', 'lgd', 'general'] as TipoPropuesta[]).map((t) => (
+          {TIPOS_PROPUESTA_LIST.map((t) => (
             <button
-              key={t}
-              className={`tipo-tab ${tipo === t ? 'active' : ''}`}
-              onClick={() => setTipo(t)}
+              key={t.id}
+              className={`tipo-tab ${tipo === t.id ? 'active' : ''}`}
+              onClick={() => setTipo(t.id)}
             >
-              {t === 'socios' && 'Socios Compromiso Íntegra 2026'}
-              {t === 'lgd' && 'Consultoría LGD'}
-              {t === 'general' && 'Colaboración general'}
+              {t.label}
             </button>
           ))}
         </div>
 
-        <div className="section-head"><div className="dot" /><h3>Datos de la empresa</h3></div>
+        <div className="section-head">
+          <div className="dot" />
+          <h3>Datos de la empresa</h3>
+        </div>
         <div className="card">
           <div className="grid2">
             <div className="field">
               <label>Nombre de la empresa *</label>
-              <input type="text" value={nombre} onChange={(e) => setNombre(e.target.value)} placeholder="Ej: Deloitte España" />
+              <input
+                type="text"
+                value={nombre}
+                onChange={(e) => setNombre(e.target.value)}
+                placeholder="Ej: Deloitte España"
+              />
             </div>
             <div className="field">
               <label>Sector *</label>
-              <input type="text" value={sector} onChange={(e) => setSector(e.target.value)} placeholder="Ej: Consultoría financiera" />
+              <input
+                type="text"
+                value={sector}
+                onChange={(e) => setSector(e.target.value)}
+                placeholder="Ej: Consultoría financiera"
+              />
             </div>
           </div>
           <div className="grid2" style={{ marginTop: 14 }}>
@@ -591,20 +782,38 @@ export default function Home() {
             </div>
           </div>
           <div className="field" style={{ marginTop: 14 }}>
-            <label>Valores RSC / enfoque ESG <span style={{ fontWeight: 300, opacity: 0.7 }}>(si los conoces)</span></label>
-            <textarea value={valores} onChange={(e) => setValores(e.target.value)} placeholder="Ej: Firmantes del Pacto Mundial, tienen plan de diversidad, objetivos de contratación inclusiva..." />
+            <label>
+              Valores RSC / enfoque ESG{' '}
+              <span style={{ fontWeight: 300, opacity: 0.7 }}>(si los conoces)</span>
+            </label>
+            <textarea
+              value={valores}
+              onChange={(e) => setValores(e.target.value)}
+              placeholder="Ej: Firmantes del Pacto Mundial, tienen plan de diversidad, objetivos de contratación inclusiva..."
+            />
           </div>
           <div className="field">
             <label>Contexto del contacto / motivación</label>
-            <textarea value={contexto} onChange={(e) => setContexto(e.target.value)} placeholder="Ej: Nos contactaron por la LGD, necesitan certificado antes de junio, interés en voluntariado corporativo..." />
+            <textarea
+              value={contexto}
+              onChange={(e) => setContexto(e.target.value)}
+              placeholder="Ej: Nos contactaron por la LGD, necesitan certificado antes de junio, interés en voluntariado corporativo..."
+            />
           </div>
         </div>
 
-        <div className="section-head"><div className="dot" /><h3>Líneas de colaboración a destacar</h3></div>
+        <div className="section-head">
+          <div className="dot" />
+          <h3>Líneas de colaboración a destacar</h3>
+        </div>
         <div className="card">
           <div className="lineas-grid">
             {LINEAS_LIST.map((l) => (
-              <label key={l.key} className={`linea-item ${lineasState[l.key] ? 'on' : ''}`} onClick={() => toggleLinea(l.key)}>
+              <label
+                key={l.key}
+                className={`linea-item ${lineasState[l.key] ? 'on' : ''}`}
+                onClick={() => toggleLinea(l.key)}
+              >
                 <div className="linea-check" />
                 {l.label}
               </label>
@@ -612,12 +821,20 @@ export default function Home() {
           </div>
         </div>
 
-        <div className="section-head"><div className="dot" /><h3>Presupuesto orientativo (opcional)</h3></div>
+        <div className="section-head">
+          <div className="dot" />
+          <h3>Presupuesto orientativo (opcional)</h3>
+        </div>
         <div className="card">
           <div className="grid2">
             <div className="field">
               <label>Importe (€)</label>
-              <input type="text" value={importe} onChange={(e) => setImporte(e.target.value)} placeholder="Ej: 10.000 · el € se añade solo" />
+              <input
+                type="text"
+                value={importe}
+                onChange={(e) => setImporte(e.target.value)}
+                placeholder="Ej: 10.000 · el € se añade solo"
+              />
             </div>
             <div className="field">
               <label>Vía de financiación</label>
@@ -631,26 +848,39 @@ export default function Home() {
           </div>
         </div>
 
-        <div className="section-head"><div className="dot" /><h3>Logo de la empresa (opcional)</h3></div>
+        <div className="section-head">
+          <div className="dot" />
+          <h3>Logo de la empresa (opcional)</h3>
+        </div>
         <div className="card">
           <div className="field" style={{ margin: 0 }}>
             <label>Sube el logo (PNG, JPG o SVG · recomendado fondo transparente)</label>
             <div className="logo-upload-row">
               <label htmlFor="f-logo" className="logo-upload-btn">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12" /></svg>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12" />
+                </svg>
                 <span>{logoBytes ? 'Cambiar archivo' : 'Seleccionar archivo'}</span>
               </label>
-              <input type="file" id="f-logo" accept="image/png,image/jpeg,image/jpg,image/svg+xml" style={{ display: 'none' }} onChange={handleLogoFile} />
+              <input
+                type="file"
+                id="f-logo"
+                accept="image/png,image/jpeg,image/jpg,image/svg+xml"
+                style={{ display: 'none' }}
+                onChange={handleLogoFile}
+              />
               {logoPreviewUrl && (
                 <div className="logo-preview-box">
                   <img src={logoPreviewUrl} alt="Logo" />
-                  <button type="button" className="logo-remove" onClick={removeLogo}>×</button>
+                  <button type="button" className="logo-remove" onClick={removeLogo}>
+                    ×
+                  </button>
                 </div>
               )}
             </div>
             <p className="logo-help">
               {logoBytes
-                ? `Logo cargado (${logoFilename}). Aparecerá en el header de las 4 páginas.`
+                ? `Logo cargado (${logoFilename}). Aparecerá en el header del documento.`
                 : 'Si no subes logo, el hueco quedará en blanco para añadirlo a mano después.'}
             </p>
           </div>
@@ -659,8 +889,14 @@ export default function Home() {
         {plantillaError && <div className="error-bar on">⚠️ {plantillaError}</div>}
         {error && <div className="error-bar on">{error}</div>}
 
-        <button className="btn-generate" onClick={generarPropuesta} disabled={loading || !plantillaBytes}>
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" /></svg>
+        <button
+          className="btn-generate"
+          onClick={generarPropuesta}
+          disabled={loading || !plantillaActivaLista}
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
+          </svg>
           Generar propuesta completa
         </button>
 
@@ -675,7 +911,7 @@ export default function Home() {
           <div ref={resultRef} className="result-section">
             <div className="result-top">
               <h2>Propuesta para {datosUltima?.nombre}</h2>
-              <p>Revisa el texto generado y descarga el Word completo de 4 páginas.</p>
+              <p>Revisa el texto generado y descarga el Word completo.</p>
             </div>
 
             <div className="proposal-block">
@@ -684,15 +920,27 @@ export default function Home() {
             </div>
 
             <div className="action-row">
-              <button className="btn-action primary" onClick={descargarWord} disabled={downloading}>
+              <button
+                className="btn-action primary"
+                onClick={descargarWord}
+                disabled={downloading}
+              >
                 {downloading ? 'Generando Word…' : 'Descargar Word completo'}
               </button>
-              <button className="btn-action" onClick={copiarTexto}>{copyLabel}</button>
-              <button className="btn-action" onClick={generarPropuesta}>Regenerar</button>
+              <button className="btn-action" onClick={copiarTexto}>
+                {copyLabel}
+              </button>
+              <button className="btn-action" onClick={generarPropuesta}>
+                Regenerar
+              </button>
             </div>
 
             <div className="info-callout">
-              <strong>Ya casi</strong> — Descarga el Word, revisa que todo esté correcto, guárdalo como PDF y envíalo. {logoBytes ? 'El logo de la empresa ya viene integrado.' : 'Recuerda añadir el logo de la empresa a mano antes de enviar.'}
+              <strong>Ya casi</strong> — Descarga el Word, revisa que todo esté correcto,
+              guárdalo como PDF y envíalo.{' '}
+              {logoBytes
+                ? 'El logo de la empresa ya viene integrado.'
+                : 'Recuerda añadir el logo de la empresa a mano antes de enviar.'}
             </div>
           </div>
         )}
