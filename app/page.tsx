@@ -6,21 +6,15 @@ import { saveAs } from 'file-saver';
 import {
   TIPOS_PROPUESTA,
   TIPOS_PROPUESTA_LIST,
+  LINEAS_LIST,
   type TipoPropuestaId,
+  type LineaKey,
   type CampoConfig,
 } from '@/lib/tipos-propuesta';
 
 // ═══════════════════════════════════════════════════════════════════════
 // TIPOS LOCALES
 // ═══════════════════════════════════════════════════════════════════════
-type LineaKey =
-  | 'reclutamiento'
-  | 'lgd'
-  | 'voluntariado'
-  | 'sensibilizacion'
-  | 'comunicacion'
-  | 'esg';
-
 type DatosGeneracion = {
   nombre: string;
   sector: string;
@@ -30,34 +24,23 @@ type DatosGeneracion = {
   contexto: string;
   importe: string;
   via: string;
-  lineas: string[];
+  lineas: string[];          // frases canónicas de las líneas seleccionadas
   tipo: TipoPropuestaId;
-  // Valores de campos extra para tipos sin IA (lgd, empleo-sin-barreras)
   extras: Record<string, string>;
 };
 
 // ═══════════════════════════════════════════════════════════════════════
 // CONSTANTES
 // ═══════════════════════════════════════════════════════════════════════
-const LINEAS_MAP: Record<LineaKey, string> = {
-  reclutamiento: 'Reclutamiento e inserción laboral de personas vulnerables',
-  lgd: 'Consultoría y cumplimiento de la LGD (Ley General de Discapacidad)',
-  voluntariado: 'Voluntariado corporativo con beneficiarios de la Fundación',
-  sensibilizacion: 'Jornadas de sensibilización y transformación cultural',
-  comunicacion: 'Acciones de comunicación y refuerzo de imagen de marca',
-  esg: 'Informe anual de huella social ESG',
-};
-
-const LINEAS_LIST: { key: LineaKey; label: string; default: boolean }[] = [
-  { key: 'reclutamiento', label: 'Reclutamiento e inserción laboral', default: true },
-  { key: 'lgd', label: 'Consultoría LGD', default: true },
-  { key: 'voluntariado', label: 'Voluntariado corporativo', default: false },
-  { key: 'sensibilizacion', label: 'Jornadas de sensibilización', default: false },
-  { key: 'comunicacion', label: 'Comunicación y marca', default: false },
-  { key: 'esg', label: 'Informe huella social ESG', default: false },
-];
-
 const PASSWORD_STORAGE_KEY = 'integra_app_password';
+
+// Logo: caja máxima dentro de la cual el logo se encaja sin deformación.
+// Unidades EMU (English Metric Units): 914400 EMU = 1 inch = 2.54 cm.
+// 4cm × 1.5cm queda elegante, suficientemente visible y no compite con
+// el logo de Íntegra que ya está en el header.
+const EMU_POR_CM = 914400 / 2.54;
+const LOGO_CAJA_W_EMU = Math.round(4.0 * EMU_POR_CM); // ≈ 1440945
+const LOGO_CAJA_H_EMU = Math.round(1.5 * EMU_POR_CM); // ≈ 540354
 
 // ═══════════════════════════════════════════════════════════════════════
 // HELPERS
@@ -78,6 +61,28 @@ function normalizarImporte(raw: string): string {
 }
 
 /**
+ * Encaja un logo de dimensiones naturalW × naturalH dentro de una caja
+ * boxW × boxH manteniendo proporciones. Devuelve las dimensiones finales
+ * en las mismas unidades que la caja.
+ */
+function fitInBox(
+  naturalW: number,
+  naturalH: number,
+  boxW: number,
+  boxH: number,
+): { w: number; h: number } {
+  if (!naturalW || !naturalH) return { w: boxW, h: boxH };
+  const ratio = naturalW / naturalH;
+  const boxRatio = boxW / boxH;
+  if (ratio > boxRatio) {
+    // Imagen más panorámica que la caja → ancho lleno, alto proporcional
+    return { w: boxW, h: Math.round(boxW / ratio) };
+  }
+  // Imagen igual o más vertical → alto lleno, ancho proporcional
+  return { w: Math.round(boxH * ratio), h: boxH };
+}
+
+/**
  * Parser de markdown-style negritas para inyectar en Word.
  * Solo usado por el tipo 'socios' (los demás tipos no llaman a IA).
  */
@@ -91,6 +96,93 @@ function buildRunsConNegritas(texto: string, propsBase: string): string {
       return `<w:r><w:rPr>${rPr}</w:rPr><w:t xml:space="preserve">${xmlEscape(parte)}</w:t></w:r>`;
     })
     .join('');
+}
+
+/**
+ * Lee un archivo de imagen y devuelve sus bytes + las dimensiones naturales
+ * para luego encajarlo proporcionalmente en el header.
+ *
+ * SVG: se rasteriza a PNG manteniendo el ancho original (máx 600px) y
+ * se devuelven sus dimensiones rasterizadas.
+ * PNG/JPG: se lee como bytes y se mide creando un Image temporal.
+ */
+async function leerLogoConDimensiones(
+  file: File,
+): Promise<{ bytes: Uint8Array; ext: 'png' | 'jpg'; w: number; h: number }> {
+  const name = (file.name || '').toLowerCase();
+  const isPng = file.type === 'image/png' || name.endsWith('.png');
+  const isSvg = file.type === 'image/svg+xml' || name.endsWith('.svg');
+
+  if (isSvg) {
+    return rasterizarSvg(await file.text());
+  }
+
+  // PNG/JPG: leer bytes + medir dimensiones con un Image
+  const buf = await file.arrayBuffer();
+  const bytes = new Uint8Array(buf);
+  const ext: 'png' | 'jpg' = isPng ? 'png' : 'jpg';
+  const blob = new Blob([bytes.buffer as ArrayBuffer], {
+    type: ext === 'png' ? 'image/png' : 'image/jpeg',
+  });
+  const url = URL.createObjectURL(blob);
+  try {
+    const dims = await medirImagen(url);
+    return { bytes, ext, w: dims.w, h: dims.h };
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+function medirImagen(url: string): Promise<{ w: number; h: number }> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve({ w: img.naturalWidth || 0, h: img.naturalHeight || 0 });
+    img.onerror = () => reject(new Error('No se pudo medir la imagen'));
+    img.src = url;
+  });
+}
+
+function rasterizarSvg(svgText: string): Promise<{
+  bytes: Uint8Array;
+  ext: 'png';
+  w: number;
+  h: number;
+}> {
+  return new Promise((resolve, reject) => {
+    const svgBlob = new Blob([svgText], { type: 'image/svg+xml;charset=utf-8' });
+    const url = URL.createObjectURL(svgBlob);
+    const img = new Image();
+    img.onload = () => {
+      const maxW = 600;
+      const naturalRatio = img.width && img.height ? img.width / img.height : 3;
+      const w = img.width ? Math.min(img.width, maxW) : maxW;
+      const h = Math.max(1, Math.round(w / naturalRatio));
+      const canvas = document.createElement('canvas');
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) {
+        URL.revokeObjectURL(url);
+        reject(new Error('No se pudo crear canvas'));
+        return;
+      }
+      ctx.drawImage(img, 0, 0, w, h);
+      canvas.toBlob(async (blob) => {
+        URL.revokeObjectURL(url);
+        if (!blob) {
+          reject(new Error('No se pudo convertir SVG a PNG'));
+          return;
+        }
+        const buf = await blob.arrayBuffer();
+        resolve({ bytes: new Uint8Array(buf), ext: 'png', w, h });
+      }, 'image/png');
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error('SVG inválido'));
+    };
+    img.src = url;
+  });
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -115,16 +207,17 @@ export default function Home() {
   const [via, setVia] = useState('Donación directa');
   const [lineasState, setLineasState] = useState<Record<LineaKey, boolean>>(() => {
     const init = {} as Record<LineaKey, boolean>;
-    LINEAS_LIST.forEach((l) => (init[l.key] = l.default));
+    LINEAS_LIST.forEach((l) => (init[l.key] = l.porDefecto));
     return init;
   });
 
-  // ── Estado para campos dinámicos (tipos sin IA: lgd, empleo-sin-barreras) ──
+  // ── Campos dinámicos (tipos sin IA) ──
   const [valoresExtra, setValoresExtra] = useState<Record<string, string>>({});
 
-  // ── Logo ──
+  // ── Logo (ahora con dimensiones naturales para encajar sin deformación) ──
   const [logoBytes, setLogoBytes] = useState<Uint8Array | null>(null);
   const [logoExt, setLogoExt] = useState<'png' | 'jpg' | null>(null);
+  const [logoDims, setLogoDims] = useState<{ w: number; h: number } | null>(null);
   const [logoPreviewUrl, setLogoPreviewUrl] = useState<string>('');
   const [logoFilename, setLogoFilename] = useState<string>('');
 
@@ -140,12 +233,11 @@ export default function Home() {
 
   const resultRef = useRef<HTMLDivElement>(null);
 
-  // Tipo activo y si usa IA
   const tipoConfig = TIPOS_PROPUESTA[tipo];
   const usaIA = tipoConfig.usaIA;
 
   // ─────────────────────────────────────────────────────────────────
-  // EFECTO: Verificar contraseña guardada al cargar
+  // EFECTOS
   // ─────────────────────────────────────────────────────────────────
   useEffect(() => {
     let cancelled = false;
@@ -176,9 +268,6 @@ export default function Home() {
     };
   }, []);
 
-  // ─────────────────────────────────────────────────────────────────
-  // EFECTO: Precargar plantilla del tipo activo
-  // ─────────────────────────────────────────────────────────────────
   useEffect(() => {
     if (!authed) return;
     const ruta = tipoConfig.plantilla;
@@ -197,9 +286,6 @@ export default function Home() {
     })();
   }, [authed, tipoConfig.plantilla, plantillasCache]);
 
-  // ─────────────────────────────────────────────────────────────────
-  // EFECTO: cuando cambia el tipo, limpiar estado intermedio
-  // ─────────────────────────────────────────────────────────────────
   useEffect(() => {
     setTextoGenerado('');
     setDatosUltima(null);
@@ -237,7 +323,7 @@ export default function Home() {
   }
 
   // ─────────────────────────────────────────────────────────────────
-  // HANDLERS: Logo
+  // HANDLERS: Logo (ahora con medición de dimensiones)
   // ─────────────────────────────────────────────────────────────────
   async function handleLogoFile(event: React.ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
@@ -254,19 +340,10 @@ export default function Home() {
       return;
     }
     try {
-      let bytes: Uint8Array;
-      let ext: 'png' | 'jpg';
-      if (isSvg) {
-        const svgText = await file.text();
-        bytes = await svgToPngBytes(svgText);
-        ext = 'png';
-      } else {
-        const buf = await file.arrayBuffer();
-        bytes = new Uint8Array(buf);
-        ext = isPng ? 'png' : 'jpg';
-      }
+      const { bytes, ext, w, h } = await leerLogoConDimensiones(file);
       setLogoBytes(bytes);
       setLogoExt(ext);
+      setLogoDims({ w, h });
       setLogoFilename(file.name);
       const blob = new Blob([bytes.buffer as ArrayBuffer], {
         type: ext === 'png' ? 'image/png' : 'image/jpeg',
@@ -282,62 +359,18 @@ export default function Home() {
   function removeLogo() {
     setLogoBytes(null);
     setLogoExt(null);
+    setLogoDims(null);
     setLogoPreviewUrl('');
     setLogoFilename('');
     const input = document.getElementById('f-logo') as HTMLInputElement | null;
     if (input) input.value = '';
   }
 
-  function svgToPngBytes(svgText: string): Promise<Uint8Array> {
-    return new Promise((resolve, reject) => {
-      const svgBlob = new Blob([svgText], { type: 'image/svg+xml;charset=utf-8' });
-      const url = URL.createObjectURL(svgBlob);
-      const img = new Image();
-      img.onload = () => {
-        const maxW = 600;
-        const ratio = img.width && img.height ? img.height / img.width : 0.3;
-        const w = img.width ? Math.min(img.width, maxW) : maxW;
-        const h = Math.round(w * ratio);
-        const canvas = document.createElement('canvas');
-        canvas.width = w;
-        canvas.height = h;
-        const ctx = canvas.getContext('2d');
-        if (!ctx) {
-          URL.revokeObjectURL(url);
-          reject(new Error('No se pudo crear canvas'));
-          return;
-        }
-        ctx.drawImage(img, 0, 0, w, h);
-        canvas.toBlob(async (blob) => {
-          URL.revokeObjectURL(url);
-          if (!blob) {
-            reject(new Error('No se pudo convertir SVG a PNG'));
-            return;
-          }
-          const buf = await blob.arrayBuffer();
-          resolve(new Uint8Array(buf));
-        }, 'image/png');
-      };
-      img.onerror = () => {
-        URL.revokeObjectURL(url);
-        reject(new Error('SVG inválido'));
-      };
-      img.src = url;
-    });
-  }
-
   // ─────────────────────────────────────────────────────────────────
-  // HANDLER: Acción principal
-  //
-  // Para tipos con IA (socios) → llama a /api/generar, muestra el texto,
-  // espera a que el usuario pulse "Descargar".
-  // Para tipos sin IA (lgd, empleo-sin-barreras) → salta la IA y descarga
-  // el Word directamente con los campos rellenados.
+  // ACCIÓN PRINCIPAL
   // ─────────────────────────────────────────────────────────────────
   async function accionPrincipal() {
-    // Validación de campos según el tipo
     if (usaIA) {
-      // Tipo 'socios': mismas validaciones que antes
       const nombreT = nombre.trim();
       const sectorT = sector.trim();
       if (!nombreT || !sectorT) {
@@ -345,7 +378,6 @@ export default function Home() {
         return;
       }
     } else {
-      // Validar todos los campos obligatorios declarados
       const faltantes = tipoConfig.campos
         .filter((c) => c.obligatorio && !(valoresExtra[c.key] || '').trim())
         .map((c) => c.label);
@@ -355,12 +387,9 @@ export default function Home() {
       }
     }
 
-    // Construir el snapshot de datos para 'datosUltima'
     let datos: DatosGeneracion;
     if (usaIA) {
-      const lineas = LINEAS_LIST.filter((l) => lineasState[l.key]).map(
-        (l) => LINEAS_MAP[l.key],
-      );
+      const lineas = LINEAS_LIST.filter((l) => lineasState[l.key]).map((l) => l.frase);
       datos = {
         nombre: nombre.trim(),
         sector: sector.trim(),
@@ -375,7 +404,6 @@ export default function Home() {
         extras: {},
       };
     } else {
-      // Tipos sin IA: el "nombre" sale de valoresExtra.nombre, el importe de extras.importe, etc.
       datos = {
         nombre: (valoresExtra.nombre || '').trim(),
         sector: '',
@@ -395,12 +423,10 @@ export default function Home() {
     setError('');
 
     if (!usaIA) {
-      // No IA: descarga directa
       await descargarWord(datos);
       return;
     }
 
-    // Sí IA: pedir texto a /api/generar
     setLoading(true);
     try {
       const password = localStorage.getItem(PASSWORD_STORAGE_KEY) || '';
@@ -433,11 +459,7 @@ export default function Home() {
   }
 
   // ─────────────────────────────────────────────────────────────────
-  // HANDLER: Descargar Word
-  //
-  // Si se pasa `datosOverride` se usan esos datos (caso de tipos sin IA
-  // que invocan descarga directamente sin haber poblado `datosUltima`).
-  // Si no, se usan `datosUltima` (caso clásico de 'socios').
+  // DESCARGAR WORD
   // ─────────────────────────────────────────────────────────────────
   async function descargarWord(datosOverride?: DatosGeneracion) {
     const d = datosOverride ?? datosUltima;
@@ -445,7 +467,6 @@ export default function Home() {
       setError('Faltan datos. Pulsa el botón principal primero.');
       return;
     }
-    // Para tipos con IA, exigimos texto generado. Para los demás, no.
     const tipoCfg = TIPOS_PROPUESTA[d.tipo];
     if (tipoCfg.usaIA && !textoGenerado) {
       setError('Falta el texto generado. Pulsa "Generar propuesta" primero.');
@@ -472,7 +493,6 @@ export default function Home() {
     setError('');
     try {
       const zip = await JSZip.loadAsync(plantillaBytes);
-      let xml = await zip.file('word/document.xml')!.async('string');
 
       const mesNombre = new Date()
         .toLocaleDateString('es-ES', { month: 'long' })
@@ -482,26 +502,54 @@ export default function Home() {
       const importeFmt = normalizarImporte(d.importe) || 'Por definir';
       const viaFmt = d.via || 'Por definir';
 
-      // Reemplazos básicos (existen en todas las plantillas o se ignoran si no)
-      xml = xml.split('{{FECHA}}').join(xmlEscape(fecha));
-      xml = xml.split('{{NOMBRE_EMPRESA}}').join(xmlEscape(d.nombre.toUpperCase()));
-      xml = xml.split('{{SECTOR}}').join(xmlEscape(d.sector));
-      xml = xml.split('{{IMPORTE}}').join(xmlEscape(importeFmt));
-      xml = xml.split('{{IMPORTE_CUERPO}}').join(xmlEscape(importeFmt));
-      xml = xml.split('{{VIA}}').join(xmlEscape(viaFmt));
-      xml = xml.split('{{VIA_CUERPO}}').join(xmlEscape(viaFmt));
-
-      // ─── Placeholders extra de tipos sin IA ───
-      // Convención: key del campo → placeholder en MAYÚSCULAS.
-      // duracion → {{DURACION}}, fechaInicio → {{FECHA_INICIO}}, numBeneficiarios → {{NUM_BENEFICIARIOS}}
-      const camelToSnake = (s: string) =>
-        s.replace(/([A-Z])/g, '_$1').toUpperCase();
+      // ─── Reemplazos básicos (string-to-string) ───
+      // Operamos sobre TODOS los XML del directorio /word: document.xml,
+      // header1.xml, footer1.xml, footer2.xml, etc. Esto permite que un
+      // placeholder pueda vivir en cualquiera de esos archivos (por ejemplo,
+      // {{FECHA_DOCUMENTO}} vive en footer1.xml en la plantilla ESB).
+      // Los reemplazos especiales con XML inyectado (TEXTO_OBJETIVO, LINEAS,
+      // LOGO) se gestionan después con su lógica propia.
+      const camelToSnake = (s: string) => s.replace(/([A-Z])/g, '_$1').toUpperCase();
+      const reemplazosBasicos: Record<string, string> = {
+        '{{FECHA}}': xmlEscape(fecha),
+        '{{NOMBRE_EMPRESA}}': xmlEscape(d.nombre.toUpperCase()),
+        '{{SECTOR}}': xmlEscape(d.sector),
+        '{{IMPORTE}}': xmlEscape(importeFmt),
+        '{{IMPORTE_CUERPO}}': xmlEscape(importeFmt),
+        '{{VIA}}': xmlEscape(viaFmt),
+        '{{VIA_CUERPO}}': xmlEscape(viaFmt),
+      };
+      // Placeholders extra de tipos sin IA (camelCase → SNAKE_CASE).
+      // Ej: 'fechaDocumento' → {{FECHA_DOCUMENTO}}.
       for (const [key, val] of Object.entries(d.extras || {})) {
-        // 'nombre' e 'importe' ya están cubiertos arriba — los saltamos
         if (key === 'nombre' || key === 'importe') continue;
-        const placeholder = `{{${camelToSnake(key)}}}`;
-        xml = xml.split(placeholder).join(xmlEscape(val));
+        reemplazosBasicos[`{{${camelToSnake(key)}}}`] = xmlEscape(val);
       }
+
+      // Aplicar a todos los XML del paquete bajo word/ (excepto los _rels y media)
+      const archivosXml = Object.keys(zip.files).filter(
+        (n) =>
+          n.startsWith('word/') &&
+          n.endsWith('.xml') &&
+          !n.includes('/_rels/') &&
+          !n.includes('/media/'),
+      );
+      for (const nombreXml of archivosXml) {
+        let contenido = await zip.file(nombreXml)!.async('string');
+        let modificado = false;
+        for (const [k, v] of Object.entries(reemplazosBasicos)) {
+          if (contenido.includes(k)) {
+            contenido = contenido.split(k).join(v);
+            modificado = true;
+          }
+        }
+        if (modificado) zip.file(nombreXml, contenido);
+      }
+
+      // ─── Reemplazos especiales en document.xml ───
+      // TEXTO_OBJETIVO y LINEAS solo existen en plantillas con IA y solo
+      // tienen sentido inyectarlos como XML rico, no como texto plano.
+      let xml = await zip.file('word/document.xml')!.async('string');
 
       // ─── TEXTO_OBJETIVO con soporte de **negritas** (solo si usa IA) ───
       if (tipoCfg.usaIA) {
@@ -543,10 +591,10 @@ export default function Home() {
 
       zip.file('word/document.xml', xml);
 
-      // ─── Logo de empresa en el header ───
+      // ─── Logo de empresa en el header (con encaje proporcional) ───
       let header = await zip.file('word/header1.xml')!.async('string');
 
-      if (logoBytes && logoExt) {
+      if (logoBytes && logoExt && logoDims) {
         const logoMediaFilename = `logo_empresa.${logoExt}`;
         zip.file(`word/media/${logoMediaFilename}`, logoBytes);
 
@@ -559,8 +607,17 @@ export default function Home() {
           zip.file('word/_rels/header1.xml.rels', rels);
         }
 
-        const cx = 1524000;
-        const cy = 457200;
+        // CALCULAR TAMAÑO REAL: encajar las dimensiones naturales del logo
+        // dentro de la caja máxima (4cm × 1.5cm) sin deformar.
+        // Esto evita los logos estirados horizontalmente que aparecían
+        // antes (caso Grupo Bimbo: ratio 2:1 forzado a ratio 10:3 = estirado).
+        const { w: cx, h: cy } = fitInBox(
+          logoDims.w,
+          logoDims.h,
+          LOGO_CAJA_W_EMU,
+          LOGO_CAJA_H_EMU,
+        );
+
         const drawingXml = `<w:r><w:rPr><w:noProof/></w:rPr><w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0"><wp:extent cx="${cx}" cy="${cy}"/><wp:effectExtent l="0" t="0" r="0" b="0"/><wp:docPr id="101" name="LogoEmpresa"/><wp:cNvGraphicFramePr><a:graphicFrameLocks xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" noChangeAspect="1"/></wp:cNvGraphicFramePr><a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:nvPicPr><pic:cNvPr id="101" name="LogoEmpresa"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed="rId99"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r>`;
 
         header = header.replace(
@@ -621,7 +678,7 @@ export default function Home() {
   const plantillaActivaLista = !!plantillasCache[tipoConfig.plantilla];
 
   // ═══════════════════════════════════════════════════════════════════
-  // RENDER: pantalla de carga inicial
+  // RENDER: pantalla de carga
   // ═══════════════════════════════════════════════════════════════════
   if (authed === null) {
     return (
@@ -640,7 +697,7 @@ export default function Home() {
   }
 
   // ═══════════════════════════════════════════════════════════════════
-  // RENDER: login gate
+  // RENDER: login
   // ═══════════════════════════════════════════════════════════════════
   if (!authed) {
     return (
@@ -673,11 +730,10 @@ export default function Home() {
   }
 
   // ═══════════════════════════════════════════════════════════════════
-  // RENDER: app principal
+  // RENDER: app
   // ═══════════════════════════════════════════════════════════════════
   return (
     <div className="shell">
-      {/* SIDEBAR */}
       <aside className="sidebar">
         <div>
           <div className="sidebar-logo">
@@ -738,7 +794,6 @@ export default function Home() {
         </div>
       </aside>
 
-      {/* MAIN */}
       <main className="main">
         <div className="section-head">
           <div className="dot" />
@@ -757,7 +812,7 @@ export default function Home() {
         </div>
 
         {/* ════════════════════════════════════════════════════════
-            RAMA A: tipos que usan IA (socios) — form clásico completo
+            RAMA A: tipos con IA (socios) — form completo
             ════════════════════════════════════════════════════════ */}
         {usaIA && (
           <>
@@ -877,7 +932,7 @@ export default function Home() {
         )}
 
         {/* ════════════════════════════════════════════════════════
-            RAMA B: tipos sin IA (lgd, empleo-sin-barreras) — form mínimo
+            RAMA B: tipos sin IA (lgd, empleo-sin-barreras)
             ════════════════════════════════════════════════════════ */}
         {!usaIA && (
           <>
@@ -899,9 +954,7 @@ export default function Home() {
           </>
         )}
 
-        {/* ════════════════════════════════════════════════════════
-            LOGO — común a todos los tipos
-            ════════════════════════════════════════════════════════ */}
+        {/* LOGO — común a todos los tipos */}
         <div className="section-head">
           <div className="dot" />
           <h3>Logo de la empresa (opcional)</h3>
@@ -934,7 +987,7 @@ export default function Home() {
             </div>
             <p className="logo-help">
               {logoBytes
-                ? `Logo cargado (${logoFilename}). Aparecerá en el header del documento.`
+                ? `Logo cargado (${logoFilename}). Se encajará en una caja máx. 4×1.5 cm sin deformación.`
                 : 'Si no subes logo, el hueco quedará en blanco para añadirlo a mano después.'}
             </p>
           </div>
@@ -965,7 +1018,6 @@ export default function Home() {
           </div>
         )}
 
-        {/* Bloque resultado: solo para tipos con IA */}
         {usaIA && textoGenerado && (
           <div ref={resultRef} className="result-section">
             <div className="result-top">
@@ -1009,7 +1061,7 @@ export default function Home() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// SUBCOMPONENTE: form dinámico a partir de la declaración de campos
+// SUBCOMPONENTE: form dinámico
 // ═══════════════════════════════════════════════════════════════════════
 function CamposDinamicos({
   campos,
@@ -1020,8 +1072,7 @@ function CamposDinamicos({
   valores: Record<string, string>;
   onChange: (key: string, val: string) => void;
 }) {
-  // Renderizamos en pares cuando son 'medio' consecutivos para mantener el grid2 del estilo actual.
-  // Lógica simple: agrupamos los campos en filas. Un campo 'completo' ocupa fila entera.
+  // Agrupamos campos en filas. Un campo 'completo' ocupa fila entera.
   const filas: CampoConfig[][] = [];
   let pendiente: CampoConfig | null = null;
   for (const c of campos) {

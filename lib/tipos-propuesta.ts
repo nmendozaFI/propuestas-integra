@@ -11,7 +11,7 @@
 //
 // AÑADIR UN TIPO NUEVO:
 //   1. Sube la plantilla .docx a /public/ con sus placeholders.
-//   2. Añade una entrada a TIPOS_PROPUESTA con sus `campos` y `placeholdersExtra`.
+//   2. Añade una entrada a TIPOS_PROPUESTA con sus `campos`.
 //   3. Listo. UI y backend lo recogen automáticamente.
 //
 // CONTRATO DE PLACEHOLDERS:
@@ -23,7 +23,7 @@
 //   Solo "socios":
 //     {{SECTOR}}, {{TEXTO_OBJETIVO}}, {{LINEAS}}, {{IMPORTE}}, {{VIA}}, {{VIA_CUERPO}}
 //   Solo "empleo-sin-barreras":
-//     {{DURACION}}, {{FECHA_INICIO}}, {{NUM_BENEFICIARIOS}}
+//     {{DURACION}}, {{FECHA_INICIO}}, {{NUM_BENEFICIARIOS}}, {{FECHA_DOCUMENTO}}
 // ═══════════════════════════════════════════════════════════════════════
 
 export type TipoPropuestaId = 'socios' | 'lgd' | 'empleo-sin-barreras';
@@ -32,34 +32,22 @@ export type TipoPropuestaId = 'socios' | 'lgd' | 'empleo-sin-barreras';
 export type CampoTipo = 'text' | 'textarea' | 'select' | 'number';
 
 export type CampoConfig = {
-  /** Clave única — se usa también como nombre del placeholder en la plantilla (en mayúsculas: nombre → {{NOMBRE_EMPRESA}}) */
   key: string;
-  /** Label que se muestra en el form */
   label: string;
-  /** Tipo de input */
   tipo: CampoTipo;
-  /** Si el campo es obligatorio */
   obligatorio?: boolean;
-  /** Placeholder del input */
   placeholder?: string;
-  /** Opciones para tipo select */
   opciones?: string[];
-  /** Texto de ayuda opcional bajo el input */
   ayuda?: string;
-  /** Ocupar grid de 2 cols (default true). false = ocupar ancho completo */
   ancho?: 'medio' | 'completo';
 };
 
 export type TipoPropuesta = {
   id: TipoPropuestaId;
   label: string;
-  /** Ruta al archivo .docx en /public */
   plantilla: string;
-  /** Si false, no se llama a la IA: se descarga directamente la plantilla rellena */
   usaIA: boolean;
-  /** Campos que el formulario debe renderizar para este tipo */
   campos: CampoConfig[];
-  /** Solo si usaIA = true: función que arma el prompt para Anthropic */
   buildPrompt?: (vars: PromptVars) => string;
 };
 
@@ -73,12 +61,74 @@ export type PromptVars = {
   lineas: string[];
 };
 
+// ═══════════════════════════════════════════════════════════════════════
+// LÍNEAS DE COLABORACIÓN — fuente única
+//
+// LINEAS_LIST se exporta para que el frontend la consuma directamente.
+// `frase` es la cadena que va al bullet {{LINEAS}} y se cita al prompt
+// para que la IA la ponga en negrita.
+// ═══════════════════════════════════════════════════════════════════════
+export type LineaKey =
+  | 'reclutamiento'
+  | 'lgd'
+  | 'voluntariado'
+  | 'sensibilizacion'
+  | 'comunicacion'
+  | 'esg';
+
+export type LineaConfig = {
+  key: LineaKey;
+  label: string;
+  frase: string;
+  porDefecto: boolean;
+};
+
+export const LINEAS_LIST: LineaConfig[] = [
+  {
+    key: 'reclutamiento',
+    label: 'Reclutamiento e inserción laboral',
+    // "de manera ilimitada" se añade SIEMPRE: es un compromiso comercial
+    // clave que no se negocia. Aparece tanto en {{LINEAS}} (bullet) como
+    // se le pide a la IA que lo respete dentro del TEXTO_OBJETIVO.
+    frase: 'Reclutamiento e inserción laboral de personas vulnerables de manera ilimitada',
+    porDefecto: true,
+  },
+  {
+    key: 'lgd',
+    label: 'Consultoría LGD',
+    frase: 'Consultoría y cumplimiento de la LGD (Ley General de Discapacidad)',
+    porDefecto: true,
+  },
+  {
+    key: 'voluntariado',
+    label: 'Voluntariado corporativo',
+    frase: 'Voluntariado corporativo con beneficiarios de la Fundación',
+    porDefecto: false,
+  },
+  {
+    key: 'sensibilizacion',
+    label: 'Jornadas de sensibilización',
+    frase: 'Jornadas de sensibilización y transformación cultural',
+    porDefecto: false,
+  },
+  {
+    key: 'comunicacion',
+    label: 'Comunicación y marca',
+    frase: 'Acciones de comunicación y refuerzo de imagen de marca',
+    porDefecto: false,
+  },
+  {
+    key: 'esg',
+    label: 'Informe huella social ESG',
+    frase: 'Informe anual de huella social ESG',
+    porDefecto: false,
+  },
+];
+
 // ─── Bloques reutilizables solo para el prompt de "socios" ───
 const FORMATO_COMUN = `
 INSTRUCCIONES DE FORMATO (idénticas para todos los tipos):
 - Exactamente 3 párrafos. El PRIMER PÁRRAFO debe ser breve (3-4 frases máximo) y servir de gancho.
-- Usa **negritas en formato markdown** (con dobles asteriscos) en los 2-3 conceptos clave que quieras resaltar: nombre de la empresa, conceptos estratégicos, métricas. NO abuses (máximo 4-5 negritas en total).
-- Menciona el nombre de la empresa de forma natural, sin sobresaturar.
 - Sin bullets, sin títulos, sin presupuesto, sin emojis. Solo texto corrido en español de España.
 - Separa párrafos con UNA línea en blanco.
 - Devuelve SOLO el texto, sin preámbulos ni explicaciones.`;
@@ -114,13 +164,24 @@ export const TIPOS_PROPUESTA: Record<TipoPropuestaId, TipoPropuesta> = {
     label: 'Socios Compromiso Íntegra 2026',
     plantilla: '/plantilla-integra.docx',
     usaIA: true,
-    // Para 'socios' los campos los gestiona el form clásico — los dejamos vacíos
-    // y el frontend usa su sección histórica completa (todo el form actual).
     campos: [],
-    buildPrompt: (v) => `Eres el equipo de alianzas de Fundación Íntegra, fundación española de inserción laboral de personas vulnerables. Redactas una PROPUESTA ESTRATÉGICA para que ${v.nombre} se convierta en socio de la Red Compromiso Íntegra 2026 — una red de empresas referentes que apuestan por el empleo socialmente responsable como parte de su estrategia ESG.
+    buildPrompt: (v) => {
+      // Construir bloque de líneas con marcado obligatorio en el prompt
+      const lineasBloque = v.lineas.length > 0
+        ? v.lineas.map(l => `  - "${l}"`).join('\n')
+        : '  - (colaboración general, sin líneas específicas)';
+
+      return `Eres el equipo de alianzas de Fundación Íntegra, fundación española de inserción laboral de personas vulnerables. Redactas una PROPUESTA ESTRATÉGICA para que ${v.nombre} se convierta en socio de la Red Compromiso Íntegra 2026 — una red de empresas referentes que apuestan por el empleo socialmente responsable como parte de su estrategia ESG.
 
 ${datosEmpresaBlock(v)}
-LÍNEAS A DESTACAR: ${v.lineas.join(', ') || 'colaboración general'}
+
+LÍNEAS DE COLABORACIÓN QUE DEBES INTEGRAR EN EL TEXTO (estas SON las líneas elegidas por el equipo; menciónalas TODAS y SIEMPRE entre **dobles asteriscos** con su frase canónica tal cual aparece aquí):
+${lineasBloque}
+
+REGLAS OBLIGATORIAS DE NEGRITAS (cumple TODAS):
+1. Cada línea de arriba debe aparecer en el texto entre **dobles asteriscos**, idealmente en el segundo párrafo donde detalles la propuesta. Usa la frase tal cual, o una variante cercana, pero TODA la frase debe ir en negrita.
+2. Si entre las líneas aparece "Reclutamiento e inserción laboral de personas vulnerables de manera ilimitada", debes incluir SIEMPRE el matiz "de manera ilimitada" dentro de las negritas — es un compromiso comercial que NO se negocia.
+3. Además, pon en negrita el nombre de la empresa (${v.nombre}) la primera vez que aparezca, y 1-2 conceptos estratégicos clave del párrafo de cierre (ej: "alianza de largo plazo", "dimensión Social ESG", "CSRD"). MÁXIMO 6-7 negritas en total.
 
 ENFOQUE ESTRATÉGICO (ESG avanzado + red de pares):
 - Tono de alianza de largo plazo, no de proveedor-cliente. Hablamos entre iguales.
@@ -130,7 +191,8 @@ ENFOQUE ESTRATÉGICO (ESG avanzado + red de pares):
 - Enmarca la inclusión laboral como ventaja competitiva, no como obligación.
 - Cierre con visión 2026+: invitación a construir algo conjunto y medible.
 - NO uses lenguaje de cumplimiento normativo.
-${FORMATO_COMUN}`,
+${FORMATO_COMUN}`;
+    },
   },
 
   lgd: {
@@ -175,6 +237,15 @@ ${FORMATO_COMUN}`,
         placeholder: 'Ej: 8',
       },
       CAMPO_IMPORTE,
+      {
+        key: 'fechaDocumento',
+        label: 'Fecha del documento',
+        tipo: 'text',
+        obligatorio: true,
+        placeholder: 'Ej: Febrero 2026',
+        ayuda: 'Aparecerá en el pie de página. Mes y año en texto (ej: "Mayo 2026").',
+        ancho: 'completo',
+      },
     ],
   },
 };
