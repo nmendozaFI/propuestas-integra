@@ -107,7 +107,12 @@ export async function POST(request: NextRequest) {
   }
 
   // 4) Obtener config del tipo y construir prompt
-  const tipoConfig = TIPOS_PROPUESTA[tipo] ?? TIPOS_PROPUESTA.general;
+  const tipoConfig = TIPOS_PROPUESTA[tipo] ?? TIPOS_PROPUESTA['empleo-sin-barreras'];
+
+  if (!tipoConfig || typeof tipoConfig.buildPrompt !== 'function') {
+    return NextResponse.json({ error: 'Tipo de propuesta inválido' }, { status: 400 });
+  }
+
   const prompt = tipoConfig.buildPrompt({
     nombre,
     sector,

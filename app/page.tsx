@@ -7,6 +7,7 @@ import {
   TIPOS_PROPUESTA,
   TIPOS_PROPUESTA_LIST,
   type TipoPropuestaId,
+  type CampoConfig,
 } from '@/lib/tipos-propuesta';
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -31,6 +32,8 @@ type DatosGeneracion = {
   via: string;
   lineas: string[];
   tipo: TipoPropuestaId;
+  // Valores de campos extra para tipos sin IA (lgd, empleo-sin-barreras)
+  extras: Record<string, string>;
 };
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -76,20 +79,9 @@ function normalizarImporte(raw: string): string {
 
 /**
  * Parser de markdown-style negritas para inyectar en Word.
- *
- * Toma un texto como "Hola **mundo** y **adiós**" + las propiedades base de
- * formato del párrafo, y devuelve una cadena XML con <w:r> alternados que
- * representan los tramos normales y los tramos en negrita.
- *
- * Las negritas heredan EXACTAMENTE las mismas propiedades que el texto base
- * (tipografía, color, tamaño) y solo añaden <w:b/>.
- *
- * Texto sin negritas → un único <w:r> con el texto.
- * Texto con negritas → secuencia de <w:r> alternados.
+ * Solo usado por el tipo 'socios' (los demás tipos no llaman a IA).
  */
 function buildRunsConNegritas(texto: string, propsBase: string): string {
-  // Split por **...** capturando los grupos. `partes` será un array como:
-  // ["Hola ", "mundo", " y ", "adiós", ""] donde índices impares son negritas.
   const partes = texto.split(/\*\*(.+?)\*\*/g);
   return partes
     .map((parte, i) => {
@@ -111,7 +103,7 @@ export default function Home() {
   const [authError, setAuthError] = useState('');
   const [authLoading, setAuthLoading] = useState(false);
 
-  // ── Datos formulario ──
+  // ── Datos formulario (clásico, solo se usa para 'socios') ──
   const [tipo, setTipo] = useState<TipoPropuestaId>('socios');
   const [nombre, setNombre] = useState('');
   const [sector, setSector] = useState('');
@@ -127,6 +119,9 @@ export default function Home() {
     return init;
   });
 
+  // ── Estado para campos dinámicos (tipos sin IA: lgd, empleo-sin-barreras) ──
+  const [valoresExtra, setValoresExtra] = useState<Record<string, string>>({});
+
   // ── Logo ──
   const [logoBytes, setLogoBytes] = useState<Uint8Array | null>(null);
   const [logoExt, setLogoExt] = useState<'png' | 'jpg' | null>(null);
@@ -134,7 +129,6 @@ export default function Home() {
   const [logoFilename, setLogoFilename] = useState<string>('');
 
   // ── Estado generación ──
-  // Cacheamos las plantillas por ruta para no volver a descargarlas cada vez.
   const [plantillasCache, setPlantillasCache] = useState<Record<string, Uint8Array>>({});
   const [plantillaError, setPlantillaError] = useState('');
   const [error, setError] = useState('');
@@ -146,12 +140,15 @@ export default function Home() {
 
   const resultRef = useRef<HTMLDivElement>(null);
 
+  // Tipo activo y si usa IA
+  const tipoConfig = TIPOS_PROPUESTA[tipo];
+  const usaIA = tipoConfig.usaIA;
+
   // ─────────────────────────────────────────────────────────────────
   // EFECTO: Verificar contraseña guardada al cargar
   // ─────────────────────────────────────────────────────────────────
   useEffect(() => {
     let cancelled = false;
-
     (async () => {
       const saved = localStorage.getItem(PASSWORD_STORAGE_KEY);
       if (!saved) {
@@ -165,9 +162,8 @@ export default function Home() {
           body: JSON.stringify({ password: saved }),
         });
         if (cancelled) return;
-        if (res.ok) {
-          setAuthed(true);
-        } else {
+        if (res.ok) setAuthed(true);
+        else {
           localStorage.removeItem(PASSWORD_STORAGE_KEY);
           setAuthed(false);
         }
@@ -175,24 +171,18 @@ export default function Home() {
         if (!cancelled) setAuthed(false);
       }
     })();
-
     return () => {
       cancelled = true;
     };
   }, []);
 
   // ─────────────────────────────────────────────────────────────────
-  // EFECTO: Precargar la plantilla del tipo actual cuando se autentica
-  // o cuando el usuario cambia de tipo.
-  //
-  // No bloqueamos la UI: si al pulsar "Descargar" la plantilla aún no
-  // ha llegado, la descargamos en ese momento.
+  // EFECTO: Precargar plantilla del tipo activo
   // ─────────────────────────────────────────────────────────────────
   useEffect(() => {
     if (!authed) return;
-    const ruta = TIPOS_PROPUESTA[tipo].plantilla;
-    if (plantillasCache[ruta]) return; // ya cacheada
-
+    const ruta = tipoConfig.plantilla;
+    if (plantillasCache[ruta]) return;
     (async () => {
       try {
         const res = await fetch(ruta);
@@ -205,7 +195,16 @@ export default function Home() {
         setPlantillaError(`No se pudo cargar la plantilla (${ruta}): ${msg}`);
       }
     })();
-  }, [authed, tipo, plantillasCache]);
+  }, [authed, tipoConfig.plantilla, plantillasCache]);
+
+  // ─────────────────────────────────────────────────────────────────
+  // EFECTO: cuando cambia el tipo, limpiar estado intermedio
+  // ─────────────────────────────────────────────────────────────────
+  useEffect(() => {
+    setTextoGenerado('');
+    setDatosUltima(null);
+    setError('');
+  }, [tipo]);
 
   // ─────────────────────────────────────────────────────────────────
   // HANDLERS: Auth
@@ -223,9 +222,7 @@ export default function Home() {
       if (res.ok) {
         localStorage.setItem(PASSWORD_STORAGE_KEY, passwordInput);
         setAuthed(true);
-      } else {
-        setAuthError('Contraseña incorrecta');
-      }
+      } else setAuthError('Contraseña incorrecta');
     } catch {
       setAuthError('Error de conexión');
     } finally {
@@ -245,20 +242,17 @@ export default function Home() {
   async function handleLogoFile(event: React.ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     if (!file) return;
-
     setError('');
     const name = (file.name || '').toLowerCase();
     const isPng = file.type === 'image/png' || name.endsWith('.png');
     const isJpg =
       file.type === 'image/jpeg' || name.endsWith('.jpg') || name.endsWith('.jpeg');
     const isSvg = file.type === 'image/svg+xml' || name.endsWith('.svg');
-
     if (!isPng && !isJpg && !isSvg) {
       setError('Formato no soportado. Usa PNG, JPG o SVG.');
       event.target.value = '';
       return;
     }
-
     try {
       let bytes: Uint8Array;
       let ext: 'png' | 'jpg';
@@ -333,37 +327,81 @@ export default function Home() {
   }
 
   // ─────────────────────────────────────────────────────────────────
-  // HANDLER: Generar propuesta (llama a /api/generar)
+  // HANDLER: Acción principal
+  //
+  // Para tipos con IA (socios) → llama a /api/generar, muestra el texto,
+  // espera a que el usuario pulse "Descargar".
+  // Para tipos sin IA (lgd, empleo-sin-barreras) → salta la IA y descarga
+  // el Word directamente con los campos rellenados.
   // ─────────────────────────────────────────────────────────────────
-  async function generarPropuesta() {
-    const nombreT = nombre.trim();
-    const sectorT = sector.trim();
+  async function accionPrincipal() {
+    // Validación de campos según el tipo
+    if (usaIA) {
+      // Tipo 'socios': mismas validaciones que antes
+      const nombreT = nombre.trim();
+      const sectorT = sector.trim();
+      if (!nombreT || !sectorT) {
+        setError('Por favor completa el nombre y el sector de la empresa.');
+        return;
+      }
+    } else {
+      // Validar todos los campos obligatorios declarados
+      const faltantes = tipoConfig.campos
+        .filter((c) => c.obligatorio && !(valoresExtra[c.key] || '').trim())
+        .map((c) => c.label);
+      if (faltantes.length > 0) {
+        setError(`Faltan campos obligatorios: ${faltantes.join(', ')}.`);
+        return;
+      }
+    }
 
-    if (!nombreT || !sectorT) {
-      setError('Por favor completa el nombre y el sector de la empresa.');
+    // Construir el snapshot de datos para 'datosUltima'
+    let datos: DatosGeneracion;
+    if (usaIA) {
+      const lineas = LINEAS_LIST.filter((l) => lineasState[l.key]).map(
+        (l) => LINEAS_MAP[l.key],
+      );
+      datos = {
+        nombre: nombre.trim(),
+        sector: sector.trim(),
+        tamano,
+        historial,
+        valores: valores.trim(),
+        contexto: contexto.trim(),
+        importe: importe.trim(),
+        via,
+        lineas,
+        tipo,
+        extras: {},
+      };
+    } else {
+      // Tipos sin IA: el "nombre" sale de valoresExtra.nombre, el importe de extras.importe, etc.
+      datos = {
+        nombre: (valoresExtra.nombre || '').trim(),
+        sector: '',
+        tamano: '',
+        historial: '',
+        valores: '',
+        contexto: '',
+        importe: (valoresExtra.importe || '').trim(),
+        via: '',
+        lineas: [],
+        tipo,
+        extras: valoresExtra,
+      };
+    }
+
+    setDatosUltima(datos);
+    setError('');
+
+    if (!usaIA) {
+      // No IA: descarga directa
+      await descargarWord(datos);
       return;
     }
 
-    const lineas = LINEAS_LIST.filter((l) => lineasState[l.key]).map(
-      (l) => LINEAS_MAP[l.key],
-    );
-
-    const datos: DatosGeneracion = {
-      nombre: nombreT,
-      sector: sectorT,
-      tamano,
-      historial,
-      valores: valores.trim(),
-      contexto: contexto.trim(),
-      importe: importe.trim(),
-      via,
-      lineas,
-      tipo,
-    };
-    setDatosUltima(datos);
-    setError('');
+    // Sí IA: pedir texto a /api/generar
     setLoading(true);
-
     try {
       const password = localStorage.getItem(PASSWORD_STORAGE_KEY) || '';
       const res = await fetch('/api/generar', {
@@ -371,22 +409,18 @@ export default function Home() {
         headers: { 'Content-Type': 'application/json', 'x-app-password': password },
         body: JSON.stringify(datos),
       });
-
       if (res.status === 401) {
         localStorage.removeItem(PASSWORD_STORAGE_KEY);
         setAuthed(false);
         setError('Sesión expirada. Vuelve a introducir la contraseña.');
         return;
       }
-
       if (!res.ok) {
         const errJson: { error?: string } = await res.json().catch(() => ({}));
         throw new Error(errJson.error || `HTTP ${res.status}`);
       }
-
       const { texto } = (await res.json()) as { texto: string };
       setTextoGenerado(texto.trim());
-
       setTimeout(() => {
         resultRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
       }, 100);
@@ -399,19 +433,27 @@ export default function Home() {
   }
 
   // ─────────────────────────────────────────────────────────────────
-  // HANDLER: Descargar Word (rellena la plantilla del tipo activo)
+  // HANDLER: Descargar Word
+  //
+  // Si se pasa `datosOverride` se usan esos datos (caso de tipos sin IA
+  // que invocan descarga directamente sin haber poblado `datosUltima`).
+  // Si no, se usan `datosUltima` (caso clásico de 'socios').
   // ─────────────────────────────────────────────────────────────────
-  async function descargarWord() {
-    if (!textoGenerado || !datosUltima) {
+  async function descargarWord(datosOverride?: DatosGeneracion) {
+    const d = datosOverride ?? datosUltima;
+    if (!d) {
+      setError('Faltan datos. Pulsa el botón principal primero.');
+      return;
+    }
+    // Para tipos con IA, exigimos texto generado. Para los demás, no.
+    const tipoCfg = TIPOS_PROPUESTA[d.tipo];
+    if (tipoCfg.usaIA && !textoGenerado) {
       setError('Falta el texto generado. Pulsa "Generar propuesta" primero.');
       return;
     }
 
-    // Usar la plantilla del tipo con el que se generó esta propuesta
-    const rutaPlantilla = TIPOS_PROPUESTA[datosUltima.tipo].plantilla;
+    const rutaPlantilla = tipoCfg.plantilla;
     let plantillaBytes = plantillasCache[rutaPlantilla];
-
-    // Fallback: si no está cacheada, descargarla ahora
     if (!plantillaBytes) {
       try {
         const resP = await fetch(rutaPlantilla);
@@ -429,7 +471,6 @@ export default function Home() {
     setDownloading(true);
     setError('');
     try {
-      const d = datosUltima;
       const zip = await JSZip.loadAsync(plantillaBytes);
       let xml = await zip.file('word/document.xml')!.async('string');
 
@@ -438,12 +479,10 @@ export default function Home() {
         .toUpperCase();
       const fecha = `${mesNombre} ${new Date().getFullYear()}`;
 
-      // BUG FIX: ambos placeholders de importe usan el mismo fallback consistente.
-      // Antes IMPORTE_CUERPO tenía hardcodeado '10.000€' como fallback, lo que
-      // generaba propuestas con cifras inventadas si el usuario no rellenaba importe.
       const importeFmt = normalizarImporte(d.importe) || 'Por definir';
       const viaFmt = d.via || 'Por definir';
 
+      // Reemplazos básicos (existen en todas las plantillas o se ignoran si no)
       xml = xml.split('{{FECHA}}').join(xmlEscape(fecha));
       xml = xml.split('{{NOMBRE_EMPRESA}}').join(xmlEscape(d.nombre.toUpperCase()));
       xml = xml.split('{{SECTOR}}').join(xmlEscape(d.sector));
@@ -452,75 +491,55 @@ export default function Home() {
       xml = xml.split('{{VIA}}').join(xmlEscape(viaFmt));
       xml = xml.split('{{VIA_CUERPO}}').join(xmlEscape(viaFmt));
 
-      // ─── TEXTO_OBJETIVO con soporte de **negritas** ───
-      //
-      // CONTEXTO XML: el placeholder {{TEXTO_OBJETIVO}} vive dentro de
-      // <w:p>...<w:r><w:t>{{TEXTO_OBJETIVO}}</w:t></w:r>...</w:p> en la plantilla.
-      // Lo que escribamos REEMPLAZA el texto, pero los <w:t></w:r></w:p> que
-      // vienen después en la plantilla siguen ahí y los tenemos que respetar.
-      //
-      // ESTRATEGIA (la misma que el código original, ahora con negritas):
-      //  - Párrafo 1 → cerrar <w:t></w:r> del placeholder y meter sus runs.
-      //    El </w:p> de la plantilla cerrará el primer párrafo correctamente.
-      //  - Párrafos siguientes → cerrar también ese </w:p> de la plantilla
-      //    ANTES de abrir un <w:p> nuevo. Si no se cierra, queda <w:p> dentro
-      //    de <w:p> y Word rechaza el archivo entero.
-      //  - Tras el último párrafo, reabrir un <w:r><w:t> vacío para que el
-      //    </w:t></w:r></w:p> que la plantilla tiene al final del placeholder
-      //    cierre correctamente.
-      const objProps =
-        '<w:rFonts w:ascii="Calibri Light" w:cs="Calibri Light" w:eastAsia="Calibri Light" w:hAnsi="Calibri Light"/><w:color w:val="1a1a1a"/><w:sz w:val="22"/>';
-      const objPara =
-        '<w:spacing w:after="160" w:line="300" w:lineRule="auto"/><w:jc w:val="both"/>';
+      // ─── Placeholders extra de tipos sin IA ───
+      // Convención: key del campo → placeholder en MAYÚSCULAS.
+      // duracion → {{DURACION}}, fechaInicio → {{FECHA_INICIO}}, numBeneficiarios → {{NUM_BENEFICIARIOS}}
+      const camelToSnake = (s: string) =>
+        s.replace(/([A-Z])/g, '_$1').toUpperCase();
+      for (const [key, val] of Object.entries(d.extras || {})) {
+        // 'nombre' e 'importe' ya están cubiertos arriba — los saltamos
+        if (key === 'nombre' || key === 'importe') continue;
+        const placeholder = `{{${camelToSnake(key)}}}`;
+        xml = xml.split(placeholder).join(xmlEscape(val));
+      }
 
-      const parrafos = String(textoGenerado)
-        .split(/\n\s*\n/)
-        .map((p) => p.trim())
-        .filter(Boolean);
+      // ─── TEXTO_OBJETIVO con soporte de **negritas** (solo si usa IA) ───
+      if (tipoCfg.usaIA) {
+        const objProps =
+          '<w:rFonts w:ascii="Calibri Light" w:cs="Calibri Light" w:eastAsia="Calibri Light" w:hAnsi="Calibri Light"/><w:color w:val="1a1a1a"/><w:sz w:val="22"/>';
+        const objPara =
+          '<w:spacing w:after="160" w:line="300" w:lineRule="auto"/><w:jc w:val="both"/>';
+        const parrafos = String(textoGenerado)
+          .split(/\n\s*\n/)
+          .map((p) => p.trim())
+          .filter(Boolean);
 
-      let textoObjetivoXml = '';
-      parrafos.forEach((p, i) => {
-        const runs = buildRunsConNegritas(p, objProps);
-        if (i === 0) {
-          // Cerrar el <w:t></w:r> del placeholder y emitir los runs del primer
-          // párrafo. NO cerramos </w:p> aquí: el </w:p> de la plantilla lo hará.
-          textoObjetivoXml += `</w:t></w:r>${runs}`;
-        } else {
-          // Cerrar el </w:p> del párrafo anterior (que era el de la plantilla
-          // en la primera iteración, o uno que abrimos nosotros después) y
-          // abrir un <w:p> nuevo con sus runs. NO lo cerramos: o lo cerrará
-          // la siguiente iteración o el reapertura final.
-          textoObjetivoXml += `</w:p><w:p><w:pPr>${objPara}</w:pPr>${runs}`;
+        let textoObjetivoXml = '';
+        parrafos.forEach((p, i) => {
+          const runs = buildRunsConNegritas(p, objProps);
+          if (i === 0) textoObjetivoXml += `</w:t></w:r>${runs}`;
+          else textoObjetivoXml += `</w:p><w:p><w:pPr>${objPara}</w:pPr>${runs}`;
+        });
+        if (parrafos.length > 1) {
+          textoObjetivoXml += `<w:r><w:rPr>${objProps}</w:rPr><w:t xml:space="preserve">`;
         }
-      });
+        if (parrafos.length === 0) textoObjetivoXml = '';
+        xml = xml.split('{{TEXTO_OBJETIVO}}').join(textoObjetivoXml);
 
-      // Si hubo más de un párrafo, el último quedó "abierto" sin su </w:p>.
-      // Reabrimos un <w:r><w:t> vacío para que la plantilla cierre con su
-      // </w:t></w:r></w:p> de forma natural.
-      if (parrafos.length > 1) {
-        textoObjetivoXml += `<w:r><w:rPr>${objProps}</w:rPr><w:t xml:space="preserve">`;
+        // ─── LINEAS ───
+        const linProps =
+          '<w:rFonts w:ascii="Calibri Light" w:cs="Calibri Light" w:eastAsia="Calibri Light" w:hAnsi="Calibri Light"/><w:color w:val="1a1a1a"/><w:sz w:val="22"/>';
+        const linPara =
+          '<w:spacing w:after="100" w:line="280" w:lineRule="auto"/><w:ind w:left="360" w:hanging="200"/>';
+        const lineasXml = d.lineas
+          .map((l, i) =>
+            i === 0
+              ? xmlEscape(l)
+              : `</w:t></w:r></w:p><w:p><w:pPr>${linPara}</w:pPr><w:r><w:rPr><w:b/><w:color w:val="C73E3A"/><w:sz w:val="22"/></w:rPr><w:t xml:space="preserve">• </w:t></w:r><w:r><w:rPr>${linProps}</w:rPr><w:t xml:space="preserve">${xmlEscape(l)}`,
+          )
+          .join('');
+        xml = xml.split('{{LINEAS}}').join(lineasXml);
       }
-
-      // Caso degenerado: si no había ningún párrafo, no rompemos nada.
-      if (parrafos.length === 0) {
-        textoObjetivoXml = '';
-      }
-
-      xml = xml.split('{{TEXTO_OBJETIVO}}').join(textoObjetivoXml);
-
-      // ─── LINEAS — bullets (sin negritas, igual que antes) ───
-      const linProps =
-        '<w:rFonts w:ascii="Calibri Light" w:cs="Calibri Light" w:eastAsia="Calibri Light" w:hAnsi="Calibri Light"/><w:color w:val="1a1a1a"/><w:sz w:val="22"/>';
-      const linPara =
-        '<w:spacing w:after="100" w:line="280" w:lineRule="auto"/><w:ind w:left="360" w:hanging="200"/>';
-      const lineasXml = d.lineas
-        .map((l, i) =>
-          i === 0
-            ? xmlEscape(l)
-            : `</w:t></w:r></w:p><w:p><w:pPr>${linPara}</w:pPr><w:r><w:rPr><w:b/><w:color w:val="C73E3A"/><w:sz w:val="22"/></w:rPr><w:t xml:space="preserve">• </w:t></w:r><w:r><w:rPr>${linProps}</w:rPr><w:t xml:space="preserve">${xmlEscape(l)}`,
-        )
-        .join('');
-      xml = xml.split('{{LINEAS}}').join(lineasXml);
 
       zip.file('word/document.xml', xml);
 
@@ -595,8 +614,11 @@ export default function Home() {
     setLineasState((prev) => ({ ...prev, [key]: !prev[key] }));
   }
 
-  // Estado derivado: ¿está la plantilla del tipo activo lista?
-  const plantillaActivaLista = !!plantillasCache[TIPOS_PROPUESTA[tipo].plantilla];
+  function setExtra(key: string, val: string) {
+    setValoresExtra((prev) => ({ ...prev, [key]: val }));
+  }
+
+  const plantillaActivaLista = !!plantillasCache[tipoConfig.plantilla];
 
   // ═══════════════════════════════════════════════════════════════════
   // RENDER: pantalla de carga inicial
@@ -695,7 +717,8 @@ export default function Home() {
             <div className="step">
               <div className="step-num">3</div>
               <div className="step-text">
-                <strong>Genera</strong> → la IA redacta la portada.
+                <strong>{usaIA ? 'Genera' : 'Pulsa "Descargar"'}</strong>{' '}
+                {usaIA ? '→ la IA redacta la portada.' : '→ se rellena la plantilla.'}
               </div>
             </div>
             <div className="step">
@@ -721,8 +744,6 @@ export default function Home() {
           <div className="dot" />
           <h3>Tipo de propuesta</h3>
         </div>
-        {/* Los tabs se generan automáticamente desde TIPOS_PROPUESTA_LIST.
-            Para añadir un tipo nuevo, basta con añadirlo a lib/tipos-propuesta.ts. */}
         <div className="tipo-tabs">
           {TIPOS_PROPUESTA_LIST.map((t) => (
             <button
@@ -735,119 +756,152 @@ export default function Home() {
           ))}
         </div>
 
-        <div className="section-head">
-          <div className="dot" />
-          <h3>Datos de la empresa</h3>
-        </div>
-        <div className="card">
-          <div className="grid2">
-            <div className="field">
-              <label>Nombre de la empresa *</label>
-              <input
-                type="text"
-                value={nombre}
-                onChange={(e) => setNombre(e.target.value)}
-                placeholder="Ej: Deloitte España"
+        {/* ════════════════════════════════════════════════════════
+            RAMA A: tipos que usan IA (socios) — form clásico completo
+            ════════════════════════════════════════════════════════ */}
+        {usaIA && (
+          <>
+            <div className="section-head">
+              <div className="dot" />
+              <h3>Datos de la empresa</h3>
+            </div>
+            <div className="card">
+              <div className="grid2">
+                <div className="field">
+                  <label>Nombre de la empresa *</label>
+                  <input
+                    type="text"
+                    value={nombre}
+                    onChange={(e) => setNombre(e.target.value)}
+                    placeholder="Ej: Deloitte España"
+                  />
+                </div>
+                <div className="field">
+                  <label>Sector *</label>
+                  <input
+                    type="text"
+                    value={sector}
+                    onChange={(e) => setSector(e.target.value)}
+                    placeholder="Ej: Consultoría financiera"
+                  />
+                </div>
+              </div>
+              <div className="grid2" style={{ marginTop: 14 }}>
+                <div className="field">
+                  <label>Tamaño aproximado</label>
+                  <select value={tamano} onChange={(e) => setTamano(e.target.value)}>
+                    <option value="">— Sin especificar —</option>
+                    <option>Pyme (hasta 50 personas)</option>
+                    <option>Mediana (50–250 personas)</option>
+                    <option>Grande (250–1000 personas)</option>
+                    <option>Corporación (+1000 personas)</option>
+                  </select>
+                </div>
+                <div className="field">
+                  <label>Historial con Íntegra</label>
+                  <select value={historial} onChange={(e) => setHistorial(e.target.value)}>
+                    <option value="">Sin historial previo</option>
+                    <option>Contacto inicial reciente</option>
+                    <option>Ex socio / colaborador</option>
+                    <option>Socio activo en renovación</option>
+                  </select>
+                </div>
+              </div>
+              <div className="field" style={{ marginTop: 14 }}>
+                <label>
+                  Valores RSC / enfoque ESG{' '}
+                  <span style={{ fontWeight: 300, opacity: 0.7 }}>(si los conoces)</span>
+                </label>
+                <textarea
+                  value={valores}
+                  onChange={(e) => setValores(e.target.value)}
+                  placeholder="Ej: Firmantes del Pacto Mundial, tienen plan de diversidad, objetivos de contratación inclusiva..."
+                />
+              </div>
+              <div className="field">
+                <label>Contexto del contacto / motivación</label>
+                <textarea
+                  value={contexto}
+                  onChange={(e) => setContexto(e.target.value)}
+                  placeholder="Ej: Nos contactaron por la LGD, necesitan certificado antes de junio, interés en voluntariado corporativo..."
+                />
+              </div>
+            </div>
+
+            <div className="section-head">
+              <div className="dot" />
+              <h3>Líneas de colaboración a destacar</h3>
+            </div>
+            <div className="card">
+              <div className="lineas-grid">
+                {LINEAS_LIST.map((l) => (
+                  <label
+                    key={l.key}
+                    className={`linea-item ${lineasState[l.key] ? 'on' : ''}`}
+                    onClick={() => toggleLinea(l.key)}
+                  >
+                    <div className="linea-check" />
+                    {l.label}
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            <div className="section-head">
+              <div className="dot" />
+              <h3>Presupuesto orientativo (opcional)</h3>
+            </div>
+            <div className="card">
+              <div className="grid2">
+                <div className="field">
+                  <label>Importe (€)</label>
+                  <input
+                    type="text"
+                    value={importe}
+                    onChange={(e) => setImporte(e.target.value)}
+                    placeholder="Ej: 10.000 · el € se añade solo"
+                  />
+                </div>
+                <div className="field">
+                  <label>Vía de financiación</label>
+                  <select value={via} onChange={(e) => setVia(e.target.value)}>
+                    <option>Donación directa</option>
+                    <option>Fondos LGD</option>
+                    <option>Presupuesto RSC</option>
+                    <option>Por definir</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+          </>
+        )}
+
+        {/* ════════════════════════════════════════════════════════
+            RAMA B: tipos sin IA (lgd, empleo-sin-barreras) — form mínimo
+            ════════════════════════════════════════════════════════ */}
+        {!usaIA && (
+          <>
+            <div className="section-head">
+              <div className="dot" />
+              <h3>Datos para la plantilla</h3>
+            </div>
+            <div className="card">
+              <p style={{ marginTop: 0, marginBottom: 14, opacity: 0.75, fontSize: 14 }}>
+                Esta propuesta usa una plantilla fija con texto predefinido. Solo necesitas
+                rellenar los siguientes datos:
+              </p>
+              <CamposDinamicos
+                campos={tipoConfig.campos}
+                valores={valoresExtra}
+                onChange={setExtra}
               />
             </div>
-            <div className="field">
-              <label>Sector *</label>
-              <input
-                type="text"
-                value={sector}
-                onChange={(e) => setSector(e.target.value)}
-                placeholder="Ej: Consultoría financiera"
-              />
-            </div>
-          </div>
-          <div className="grid2" style={{ marginTop: 14 }}>
-            <div className="field">
-              <label>Tamaño aproximado</label>
-              <select value={tamano} onChange={(e) => setTamano(e.target.value)}>
-                <option value="">— Sin especificar —</option>
-                <option>Pyme (hasta 50 personas)</option>
-                <option>Mediana (50–250 personas)</option>
-                <option>Grande (250–1000 personas)</option>
-                <option>Corporación (+1000 personas)</option>
-              </select>
-            </div>
-            <div className="field">
-              <label>Historial con Íntegra</label>
-              <select value={historial} onChange={(e) => setHistorial(e.target.value)}>
-                <option value="">Sin historial previo</option>
-                <option>Contacto inicial reciente</option>
-                <option>Ex socio / colaborador</option>
-                <option>Socio activo en renovación</option>
-              </select>
-            </div>
-          </div>
-          <div className="field" style={{ marginTop: 14 }}>
-            <label>
-              Valores RSC / enfoque ESG{' '}
-              <span style={{ fontWeight: 300, opacity: 0.7 }}>(si los conoces)</span>
-            </label>
-            <textarea
-              value={valores}
-              onChange={(e) => setValores(e.target.value)}
-              placeholder="Ej: Firmantes del Pacto Mundial, tienen plan de diversidad, objetivos de contratación inclusiva..."
-            />
-          </div>
-          <div className="field">
-            <label>Contexto del contacto / motivación</label>
-            <textarea
-              value={contexto}
-              onChange={(e) => setContexto(e.target.value)}
-              placeholder="Ej: Nos contactaron por la LGD, necesitan certificado antes de junio, interés en voluntariado corporativo..."
-            />
-          </div>
-        </div>
+          </>
+        )}
 
-        <div className="section-head">
-          <div className="dot" />
-          <h3>Líneas de colaboración a destacar</h3>
-        </div>
-        <div className="card">
-          <div className="lineas-grid">
-            {LINEAS_LIST.map((l) => (
-              <label
-                key={l.key}
-                className={`linea-item ${lineasState[l.key] ? 'on' : ''}`}
-                onClick={() => toggleLinea(l.key)}
-              >
-                <div className="linea-check" />
-                {l.label}
-              </label>
-            ))}
-          </div>
-        </div>
-
-        <div className="section-head">
-          <div className="dot" />
-          <h3>Presupuesto orientativo (opcional)</h3>
-        </div>
-        <div className="card">
-          <div className="grid2">
-            <div className="field">
-              <label>Importe (€)</label>
-              <input
-                type="text"
-                value={importe}
-                onChange={(e) => setImporte(e.target.value)}
-                placeholder="Ej: 10.000 · el € se añade solo"
-              />
-            </div>
-            <div className="field">
-              <label>Vía de financiación</label>
-              <select value={via} onChange={(e) => setVia(e.target.value)}>
-                <option>Donación directa</option>
-                <option>Fondos LGD</option>
-                <option>Presupuesto RSC</option>
-                <option>Por definir</option>
-              </select>
-            </div>
-          </div>
-        </div>
-
+        {/* ════════════════════════════════════════════════════════
+            LOGO — común a todos los tipos
+            ════════════════════════════════════════════════════════ */}
         <div className="section-head">
           <div className="dot" />
           <h3>Logo de la empresa (opcional)</h3>
@@ -891,13 +945,17 @@ export default function Home() {
 
         <button
           className="btn-generate"
-          onClick={generarPropuesta}
-          disabled={loading || !plantillaActivaLista}
+          onClick={accionPrincipal}
+          disabled={loading || downloading || !plantillaActivaLista}
         >
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
             <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
           </svg>
-          Generar propuesta completa
+          {usaIA
+            ? 'Generar propuesta completa'
+            : downloading
+            ? 'Generando Word…'
+            : 'Generar y descargar Word'}
         </button>
 
         {loading && (
@@ -907,7 +965,8 @@ export default function Home() {
           </div>
         )}
 
-        {textoGenerado && (
+        {/* Bloque resultado: solo para tipos con IA */}
+        {usaIA && textoGenerado && (
           <div ref={resultRef} className="result-section">
             <div className="result-top">
               <h2>Propuesta para {datosUltima?.nombre}</h2>
@@ -922,7 +981,7 @@ export default function Home() {
             <div className="action-row">
               <button
                 className="btn-action primary"
-                onClick={descargarWord}
+                onClick={() => descargarWord()}
                 disabled={downloading}
               >
                 {downloading ? 'Generando Word…' : 'Descargar Word completo'}
@@ -930,7 +989,7 @@ export default function Home() {
               <button className="btn-action" onClick={copiarTexto}>
                 {copyLabel}
               </button>
-              <button className="btn-action" onClick={generarPropuesta}>
+              <button className="btn-action" onClick={accionPrincipal}>
                 Regenerar
               </button>
             </div>
@@ -945,6 +1004,104 @@ export default function Home() {
           </div>
         )}
       </main>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// SUBCOMPONENTE: form dinámico a partir de la declaración de campos
+// ═══════════════════════════════════════════════════════════════════════
+function CamposDinamicos({
+  campos,
+  valores,
+  onChange,
+}: {
+  campos: CampoConfig[];
+  valores: Record<string, string>;
+  onChange: (key: string, val: string) => void;
+}) {
+  // Renderizamos en pares cuando son 'medio' consecutivos para mantener el grid2 del estilo actual.
+  // Lógica simple: agrupamos los campos en filas. Un campo 'completo' ocupa fila entera.
+  const filas: CampoConfig[][] = [];
+  let pendiente: CampoConfig | null = null;
+  for (const c of campos) {
+    const ancho = c.ancho ?? 'medio';
+    if (ancho === 'completo') {
+      if (pendiente) {
+        filas.push([pendiente]);
+        pendiente = null;
+      }
+      filas.push([c]);
+    } else {
+      if (pendiente) {
+        filas.push([pendiente, c]);
+        pendiente = null;
+      } else {
+        pendiente = c;
+      }
+    }
+  }
+  if (pendiente) filas.push([pendiente]);
+
+  return (
+    <>
+      {filas.map((fila, idx) => (
+        <div
+          key={idx}
+          className={fila.length === 2 ? 'grid2' : ''}
+          style={idx > 0 ? { marginTop: 14 } : undefined}
+        >
+          {fila.map((c) => (
+            <CampoRender
+              key={c.key}
+              campo={c}
+              valor={valores[c.key] || ''}
+              onChange={(v) => onChange(c.key, v)}
+            />
+          ))}
+        </div>
+      ))}
+    </>
+  );
+}
+
+function CampoRender({
+  campo,
+  valor,
+  onChange,
+}: {
+  campo: CampoConfig;
+  valor: string;
+  onChange: (v: string) => void;
+}) {
+  const label = campo.obligatorio ? `${campo.label} *` : campo.label;
+  return (
+    <div className="field">
+      <label>{label}</label>
+      {campo.tipo === 'textarea' ? (
+        <textarea
+          value={valor}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder={campo.placeholder}
+        />
+      ) : campo.tipo === 'select' ? (
+        <select value={valor} onChange={(e) => onChange(e.target.value)}>
+          <option value="">— Selecciona —</option>
+          {(campo.opciones || []).map((op) => (
+            <option key={op}>{op}</option>
+          ))}
+        </select>
+      ) : (
+        <input
+          type={campo.tipo === 'number' ? 'number' : 'text'}
+          value={valor}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder={campo.placeholder}
+        />
+      )}
+      {campo.ayuda && (
+        <p style={{ marginTop: 6, fontSize: 12, opacity: 0.7 }}>{campo.ayuda}</p>
+      )}
     </div>
   );
 }
