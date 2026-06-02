@@ -61,9 +61,9 @@ body { font-family: 'DM Sans', sans-serif; background: var(--bg); color: var(--t
 .shell { display: grid; grid-template-columns: 340px 1fr; min-height: 100vh; }
 
 .sidebar {
-  background: var(--verde); padding: 2.5rem 2rem;
+  background: var(--verde); padding: 5rem 2rem;
   position: sticky; top: 0; height: 100vh; overflow-y: auto;
-  display: flex; flex-direction: column; gap: 2rem;
+  display: flex; flex-direction: column; gap: 2rem; margin-top: 64px
 }
 .sidebar-logo { display: flex; align-items: center; gap: 10px; }
 .sidebar-logo .icon-box {
@@ -99,7 +99,7 @@ body { font-family: 'DM Sans', sans-serif; background: var(--bg); color: var(--t
 .logout-btn:hover { background: rgba(255,255,255,0.15); }
 
 /* ═══ MAIN ═══ */
-.main { padding: 2.5rem 2.5rem 4rem; max-width: 820px; }
+.main { padding: 2.5rem 2.5rem 4rem; max-width: 820px; margin-top: 64px }
 
 .section-head { display: flex; align-items: center; gap: 8px; margin-bottom: 1.25rem; }
 .section-head .dot { width: 8px; height: 8px; background: var(--verde); border-radius: 50%; }
@@ -227,8 +227,42 @@ select { appearance: none; background-image: url("data:image/svg+xml,%3Csvg xmln
 
 @media (max-width: 900px) {
   .shell { grid-template-columns: 1fr; }
-  .sidebar { position: static; height: auto; }
-  .main { padding: 1.5rem; }
+  .sidebar { position: static; height: auto; margin-top: 64px}
+  .main { padding: 1.5rem;  }
   .grid2 { grid-template-columns: 1fr; }
   .lineas-grid { grid-template-columns: 1fr; }
+}
+
+.navbar {
+  position: fixed; /* Fija la barra de navegación en la pantalla */
+  top: 0;          /* Alinea la navbar exactamente en el borde superior */
+  left: 0;         /* Se extiende desde el lado izquierdo */
+  width: 100%;     /* Ocupa todo el ancho de la ventana */
+  z-index: 1000;   /* Asegura que esté por encima de otros elementos */
+  display: flex;
+  gap: 1.5rem;
+  padding: 1rem 2rem;
+  border-bottom: 1px solid #e5e7eb;
+  background-color: #fff;
+}
+
+.navbar a {
+  font-size: 0.95rem;
+  font-weight: 500;
+  color: #555;
+  text-decoration: none;
+  padding: 0.35rem 0.75rem;
+  border-radius: 6px;
+  transition: color 0.15s, background 0.15s;
+}
+
+.navbar a:hover {
+  color: #111;
+  background-color: #f3f4f6;
+}
+
+.navbar a.active {
+  color: #111;
+  font-weight: 600;
+  background-color: #f3f4f6;
 }
