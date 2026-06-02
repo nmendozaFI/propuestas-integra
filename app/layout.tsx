@@ -4,7 +4,7 @@
 
   export const metadata: Metadata = {
     title: 'Generador de propuestas · Fundación Íntegra',
-    description: 'Equipo de alianzas · Fundación Íntegra',
+    description: 'Equipo · Fundación Íntegra',
   };
 
   export default function RootLayout({

@@ -1,8 +1,8 @@
-'use client';
+"use client";
 
-import { useEffect, useRef, useState } from 'react';
-import JSZip from 'jszip';
-import { saveAs } from 'file-saver';
+import { useEffect, useRef, useState } from "react";
+import JSZip from "jszip";
+import { saveAs } from "file-saver";
 import {
   TIPOS_PROPUESTA,
   TIPOS_PROPUESTA_LIST,
@@ -10,7 +10,8 @@ import {
   type TipoPropuestaId,
   type LineaKey,
   type CampoConfig,
-} from '@/lib/tipos-propuesta';
+} from "@/lib/tipos-propuesta";
+import { cargarPlantillaBytes } from "@/lib/plantillas-cliente";
 
 // ═══════════════════════════════════════════════════════════════════════
 // TIPOS LOCALES
@@ -24,7 +25,7 @@ type DatosGeneracion = {
   contexto: string;
   importe: string;
   via: string;
-  lineas: string[];          // frases canónicas de las líneas seleccionadas
+  lineas: string[]; // frases canónicas de las líneas seleccionadas
   tipo: TipoPropuestaId;
   extras: Record<string, string>;
 };
@@ -32,7 +33,7 @@ type DatosGeneracion = {
 // ═══════════════════════════════════════════════════════════════════════
 // CONSTANTES
 // ═══════════════════════════════════════════════════════════════════════
-const PASSWORD_STORAGE_KEY = 'integra_app_password';
+const PASSWORD_STORAGE_KEY = "integra_app_password";
 
 // Logo: caja máxima dentro de la cual el logo se encaja sin deformación.
 // Unidades EMU (English Metric Units): 914400 EMU = 1 inch = 2.54 cm.
@@ -46,17 +47,17 @@ const LOGO_CAJA_H_EMU = Math.round(1.5 * EMU_POR_CM); // ≈ 540354
 // HELPERS
 // ═══════════════════════════════════════════════════════════════════════
 function xmlEscape(s: string): string {
-  return String(s || '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
+  return String(s || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
 }
 
 function normalizarImporte(raw: string): string {
-  if (!raw) return '';
+  if (!raw) return "";
   const s = String(raw).trim();
   if (/€|eur|euro/i.test(s)) return s;
-  if (/^[\d.,\s]+$/.test(s)) return s.trim() + '€';
+  if (/^[\d.,\s]+$/.test(s)) return s.trim() + "€";
   return s;
 }
 
@@ -90,12 +91,12 @@ function buildRunsConNegritas(texto: string, propsBase: string): string {
   const partes = texto.split(/\*\*(.+?)\*\*/g);
   return partes
     .map((parte, i) => {
-      if (!parte) return '';
+      if (!parte) return "";
       const isBold = i % 2 === 1;
       const rPr = isBold ? `${propsBase}<w:b/><w:bCs/>` : propsBase;
       return `<w:r><w:rPr>${rPr}</w:rPr><w:t xml:space="preserve">${xmlEscape(parte)}</w:t></w:r>`;
     })
-    .join('');
+    .join("");
 }
 
 /**
@@ -108,10 +109,10 @@ function buildRunsConNegritas(texto: string, propsBase: string): string {
  */
 async function leerLogoConDimensiones(
   file: File,
-): Promise<{ bytes: Uint8Array; ext: 'png' | 'jpg'; w: number; h: number }> {
-  const name = (file.name || '').toLowerCase();
-  const isPng = file.type === 'image/png' || name.endsWith('.png');
-  const isSvg = file.type === 'image/svg+xml' || name.endsWith('.svg');
+): Promise<{ bytes: Uint8Array; ext: "png" | "jpg"; w: number; h: number }> {
+  const name = (file.name || "").toLowerCase();
+  const isPng = file.type === "image/png" || name.endsWith(".png");
+  const isSvg = file.type === "image/svg+xml" || name.endsWith(".svg");
 
   if (isSvg) {
     return rasterizarSvg(await file.text());
@@ -120,9 +121,9 @@ async function leerLogoConDimensiones(
   // PNG/JPG: leer bytes + medir dimensiones con un Image
   const buf = await file.arrayBuffer();
   const bytes = new Uint8Array(buf);
-  const ext: 'png' | 'jpg' = isPng ? 'png' : 'jpg';
+  const ext: "png" | "jpg" = isPng ? "png" : "jpg";
   const blob = new Blob([bytes.buffer as ArrayBuffer], {
-    type: ext === 'png' ? 'image/png' : 'image/jpeg',
+    type: ext === "png" ? "image/png" : "image/jpeg",
   });
   const url = URL.createObjectURL(blob);
   try {
@@ -136,20 +137,23 @@ async function leerLogoConDimensiones(
 function medirImagen(url: string): Promise<{ w: number; h: number }> {
   return new Promise((resolve, reject) => {
     const img = new Image();
-    img.onload = () => resolve({ w: img.naturalWidth || 0, h: img.naturalHeight || 0 });
-    img.onerror = () => reject(new Error('No se pudo medir la imagen'));
+    img.onload = () =>
+      resolve({ w: img.naturalWidth || 0, h: img.naturalHeight || 0 });
+    img.onerror = () => reject(new Error("No se pudo medir la imagen"));
     img.src = url;
   });
 }
 
 function rasterizarSvg(svgText: string): Promise<{
   bytes: Uint8Array;
-  ext: 'png';
+  ext: "png";
   w: number;
   h: number;
 }> {
   return new Promise((resolve, reject) => {
-    const svgBlob = new Blob([svgText], { type: 'image/svg+xml;charset=utf-8' });
+    const svgBlob = new Blob([svgText], {
+      type: "image/svg+xml;charset=utf-8",
+    });
     const url = URL.createObjectURL(svgBlob);
     const img = new Image();
     img.onload = () => {
@@ -157,29 +161,29 @@ function rasterizarSvg(svgText: string): Promise<{
       const naturalRatio = img.width && img.height ? img.width / img.height : 3;
       const w = img.width ? Math.min(img.width, maxW) : maxW;
       const h = Math.max(1, Math.round(w / naturalRatio));
-      const canvas = document.createElement('canvas');
+      const canvas = document.createElement("canvas");
       canvas.width = w;
       canvas.height = h;
-      const ctx = canvas.getContext('2d');
+      const ctx = canvas.getContext("2d");
       if (!ctx) {
         URL.revokeObjectURL(url);
-        reject(new Error('No se pudo crear canvas'));
+        reject(new Error("No se pudo crear canvas"));
         return;
       }
       ctx.drawImage(img, 0, 0, w, h);
       canvas.toBlob(async (blob) => {
         URL.revokeObjectURL(url);
         if (!blob) {
-          reject(new Error('No se pudo convertir SVG a PNG'));
+          reject(new Error("No se pudo convertir SVG a PNG"));
           return;
         }
         const buf = await blob.arrayBuffer();
-        resolve({ bytes: new Uint8Array(buf), ext: 'png', w, h });
-      }, 'image/png');
+        resolve({ bytes: new Uint8Array(buf), ext: "png", w, h });
+      }, "image/png");
     };
     img.onerror = () => {
       URL.revokeObjectURL(url);
-      reject(new Error('SVG inválido'));
+      reject(new Error("SVG inválido"));
     };
     img.src = url;
   });
@@ -191,45 +195,51 @@ function rasterizarSvg(svgText: string): Promise<{
 export default function Home() {
   // ── Auth gate ──
   const [authed, setAuthed] = useState<boolean | null>(null);
-  const [passwordInput, setPasswordInput] = useState('');
-  const [authError, setAuthError] = useState('');
+  const [passwordInput, setPasswordInput] = useState("");
+  const [authError, setAuthError] = useState("");
   const [authLoading, setAuthLoading] = useState(false);
 
   // ── Datos formulario (clásico, solo se usa para 'socios') ──
-  const [tipo, setTipo] = useState<TipoPropuestaId>('socios');
-  const [nombre, setNombre] = useState('');
-  const [sector, setSector] = useState('');
-  const [tamano, setTamano] = useState('');
-  const [historial, setHistorial] = useState('');
-  const [valores, setValores] = useState('');
-  const [contexto, setContexto] = useState('');
-  const [importe, setImporte] = useState('');
-  const [via, setVia] = useState('Donación directa');
-  const [lineasState, setLineasState] = useState<Record<LineaKey, boolean>>(() => {
-    const init = {} as Record<LineaKey, boolean>;
-    LINEAS_LIST.forEach((l) => (init[l.key] = l.porDefecto));
-    return init;
-  });
+  const [tipo, setTipo] = useState<TipoPropuestaId>("socios");
+  const [nombre, setNombre] = useState("");
+  const [sector, setSector] = useState("");
+  const [tamano, setTamano] = useState("");
+  const [historial, setHistorial] = useState("");
+  const [valores, setValores] = useState("");
+  const [contexto, setContexto] = useState("");
+  const [importe, setImporte] = useState("");
+  const [via, setVia] = useState("Donación directa");
+  const [lineasState, setLineasState] = useState<Record<LineaKey, boolean>>(
+    () => {
+      const init = {} as Record<LineaKey, boolean>;
+      LINEAS_LIST.forEach((l) => (init[l.key] = l.porDefecto));
+      return init;
+    },
+  );
 
   // ── Campos dinámicos (tipos sin IA) ──
   const [valoresExtra, setValoresExtra] = useState<Record<string, string>>({});
 
   // ── Logo (ahora con dimensiones naturales para encajar sin deformación) ──
   const [logoBytes, setLogoBytes] = useState<Uint8Array | null>(null);
-  const [logoExt, setLogoExt] = useState<'png' | 'jpg' | null>(null);
-  const [logoDims, setLogoDims] = useState<{ w: number; h: number } | null>(null);
-  const [logoPreviewUrl, setLogoPreviewUrl] = useState<string>('');
-  const [logoFilename, setLogoFilename] = useState<string>('');
+  const [logoExt, setLogoExt] = useState<"png" | "jpg" | null>(null);
+  const [logoDims, setLogoDims] = useState<{ w: number; h: number } | null>(
+    null,
+  );
+  const [logoPreviewUrl, setLogoPreviewUrl] = useState<string>("");
+  const [logoFilename, setLogoFilename] = useState<string>("");
 
   // ── Estado generación ──
-  const [plantillasCache, setPlantillasCache] = useState<Record<string, Uint8Array>>({});
-  const [plantillaError, setPlantillaError] = useState('');
-  const [error, setError] = useState('');
+  const [plantillasCache, setPlantillasCache] = useState<
+    Record<string, Uint8Array>
+  >({});
+  const [plantillaError, setPlantillaError] = useState("");
+  const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [downloading, setDownloading] = useState(false);
-  const [textoGenerado, setTextoGenerado] = useState('');
+  const [textoGenerado, setTextoGenerado] = useState("");
   const [datosUltima, setDatosUltima] = useState<DatosGeneracion | null>(null);
-  const [copyLabel, setCopyLabel] = useState('Copiar solo el texto');
+  const [copyLabel, setCopyLabel] = useState("Copiar solo el texto");
 
   const resultRef = useRef<HTMLDivElement>(null);
 
@@ -248,9 +258,9 @@ export default function Home() {
         return;
       }
       try {
-        const res = await fetch('/api/verificar', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+        const res = await fetch("/api/verificar", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ password: saved }),
         });
         if (cancelled) return;
@@ -274,11 +284,9 @@ export default function Home() {
     if (plantillasCache[ruta]) return;
     (async () => {
       try {
-        const res = await fetch(ruta);
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const buf = await res.arrayBuffer();
-        setPlantillasCache((prev) => ({ ...prev, [ruta]: new Uint8Array(buf) }));
-        setPlantillaError('');
+        const bytes = await cargarPlantillaBytes(ruta);
+        setPlantillasCache((prev) => ({ ...prev, [ruta]: bytes }));
+        setPlantillaError("");
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         setPlantillaError(`No se pudo cargar la plantilla (${ruta}): ${msg}`);
@@ -287,9 +295,9 @@ export default function Home() {
   }, [authed, tipoConfig.plantilla, plantillasCache]);
 
   useEffect(() => {
-    setTextoGenerado('');
+    setTextoGenerado("");
     setDatosUltima(null);
-    setError('');
+    setError("");
   }, [tipo]);
 
   // ─────────────────────────────────────────────────────────────────
@@ -297,20 +305,20 @@ export default function Home() {
   // ─────────────────────────────────────────────────────────────────
   async function handleLogin(e: React.FormEvent) {
     e.preventDefault();
-    setAuthError('');
+    setAuthError("");
     setAuthLoading(true);
     try {
-      const res = await fetch('/api/verificar', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+      const res = await fetch("/api/verificar", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ password: passwordInput }),
       });
       if (res.ok) {
         localStorage.setItem(PASSWORD_STORAGE_KEY, passwordInput);
         setAuthed(true);
-      } else setAuthError('Contraseña incorrecta');
+      } else setAuthError("Contraseña incorrecta");
     } catch {
-      setAuthError('Error de conexión');
+      setAuthError("Error de conexión");
     } finally {
       setAuthLoading(false);
     }
@@ -319,7 +327,7 @@ export default function Home() {
   function handleLogout() {
     localStorage.removeItem(PASSWORD_STORAGE_KEY);
     setAuthed(false);
-    setPasswordInput('');
+    setPasswordInput("");
   }
 
   // ─────────────────────────────────────────────────────────────────
@@ -328,15 +336,17 @@ export default function Home() {
   async function handleLogoFile(event: React.ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     if (!file) return;
-    setError('');
-    const name = (file.name || '').toLowerCase();
-    const isPng = file.type === 'image/png' || name.endsWith('.png');
+    setError("");
+    const name = (file.name || "").toLowerCase();
+    const isPng = file.type === "image/png" || name.endsWith(".png");
     const isJpg =
-      file.type === 'image/jpeg' || name.endsWith('.jpg') || name.endsWith('.jpeg');
-    const isSvg = file.type === 'image/svg+xml' || name.endsWith('.svg');
+      file.type === "image/jpeg" ||
+      name.endsWith(".jpg") ||
+      name.endsWith(".jpeg");
+    const isSvg = file.type === "image/svg+xml" || name.endsWith(".svg");
     if (!isPng && !isJpg && !isSvg) {
-      setError('Formato no soportado. Usa PNG, JPG o SVG.');
-      event.target.value = '';
+      setError("Formato no soportado. Usa PNG, JPG o SVG.");
+      event.target.value = "";
       return;
     }
     try {
@@ -346,7 +356,7 @@ export default function Home() {
       setLogoDims({ w, h });
       setLogoFilename(file.name);
       const blob = new Blob([bytes.buffer as ArrayBuffer], {
-        type: ext === 'png' ? 'image/png' : 'image/jpeg',
+        type: ext === "png" ? "image/png" : "image/jpeg",
       });
       setLogoPreviewUrl(URL.createObjectURL(blob));
     } catch (err) {
@@ -360,10 +370,10 @@ export default function Home() {
     setLogoBytes(null);
     setLogoExt(null);
     setLogoDims(null);
-    setLogoPreviewUrl('');
-    setLogoFilename('');
-    const input = document.getElementById('f-logo') as HTMLInputElement | null;
-    if (input) input.value = '';
+    setLogoPreviewUrl("");
+    setLogoFilename("");
+    const input = document.getElementById("f-logo") as HTMLInputElement | null;
+    if (input) input.value = "";
   }
 
   // ─────────────────────────────────────────────────────────────────
@@ -374,22 +384,24 @@ export default function Home() {
       const nombreT = nombre.trim();
       const sectorT = sector.trim();
       if (!nombreT || !sectorT) {
-        setError('Por favor completa el nombre y el sector de la empresa.');
+        setError("Por favor completa el nombre y el sector de la empresa.");
         return;
       }
     } else {
       const faltantes = tipoConfig.campos
-        .filter((c) => c.obligatorio && !(valoresExtra[c.key] || '').trim())
+        .filter((c) => c.obligatorio && !(valoresExtra[c.key] || "").trim())
         .map((c) => c.label);
       if (faltantes.length > 0) {
-        setError(`Faltan campos obligatorios: ${faltantes.join(', ')}.`);
+        setError(`Faltan campos obligatorios: ${faltantes.join(", ")}.`);
         return;
       }
     }
 
     let datos: DatosGeneracion;
     if (usaIA) {
-      const lineas = LINEAS_LIST.filter((l) => lineasState[l.key]).map((l) => l.frase);
+      const lineas = LINEAS_LIST.filter((l) => lineasState[l.key]).map(
+        (l) => l.frase,
+      );
       datos = {
         nombre: nombre.trim(),
         sector: sector.trim(),
@@ -405,14 +417,14 @@ export default function Home() {
       };
     } else {
       datos = {
-        nombre: (valoresExtra.nombre || '').trim(),
-        sector: '',
-        tamano: '',
-        historial: '',
-        valores: '',
-        contexto: '',
-        importe: (valoresExtra.importe || '').trim(),
-        via: '',
+        nombre: (valoresExtra.nombre || "").trim(),
+        sector: "",
+        tamano: "",
+        historial: "",
+        valores: "",
+        contexto: "",
+        importe: (valoresExtra.importe || "").trim(),
+        via: "",
         lineas: [],
         tipo,
         extras: valoresExtra,
@@ -420,7 +432,7 @@ export default function Home() {
     }
 
     setDatosUltima(datos);
-    setError('');
+    setError("");
 
     if (!usaIA) {
       await descargarWord(datos);
@@ -429,16 +441,19 @@ export default function Home() {
 
     setLoading(true);
     try {
-      const password = localStorage.getItem(PASSWORD_STORAGE_KEY) || '';
-      const res = await fetch('/api/generar', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-app-password': password },
+      const password = localStorage.getItem(PASSWORD_STORAGE_KEY) || "";
+      const res = await fetch("/api/generar", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-app-password": password,
+        },
         body: JSON.stringify(datos),
       });
       if (res.status === 401) {
         localStorage.removeItem(PASSWORD_STORAGE_KEY);
         setAuthed(false);
-        setError('Sesión expirada. Vuelve a introducir la contraseña.');
+        setError("Sesión expirada. Vuelve a introducir la contraseña.");
         return;
       }
       if (!res.ok) {
@@ -448,7 +463,10 @@ export default function Home() {
       const { texto } = (await res.json()) as { texto: string };
       setTextoGenerado(texto.trim());
       setTimeout(() => {
-        resultRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        resultRef.current?.scrollIntoView({
+          behavior: "smooth",
+          block: "start",
+        });
       }, 100);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -464,7 +482,7 @@ export default function Home() {
   async function descargarWord(datosOverride?: DatosGeneracion) {
     const d = datosOverride ?? datosUltima;
     if (!d) {
-      setError('Faltan datos. Pulsa el botón principal primero.');
+      setError("Faltan datos. Pulsa el botón principal primero.");
       return;
     }
     const tipoCfg = TIPOS_PROPUESTA[d.tipo];
@@ -477,11 +495,11 @@ export default function Home() {
     let plantillaBytes = plantillasCache[rutaPlantilla];
     if (!plantillaBytes) {
       try {
-        const resP = await fetch(rutaPlantilla);
-        if (!resP.ok) throw new Error(`HTTP ${resP.status}`);
-        const buf = await resP.arrayBuffer();
-        plantillaBytes = new Uint8Array(buf);
-        setPlantillasCache((prev) => ({ ...prev, [rutaPlantilla]: plantillaBytes! }));
+        plantillaBytes = await cargarPlantillaBytes(rutaPlantilla);
+        setPlantillasCache((prev) => ({
+          ...prev,
+          [rutaPlantilla]: plantillaBytes!,
+        }));
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         setError(`No se pudo cargar la plantilla: ${msg}`);
@@ -490,17 +508,17 @@ export default function Home() {
     }
 
     setDownloading(true);
-    setError('');
+    setError("");
     try {
       const zip = await JSZip.loadAsync(plantillaBytes);
 
       const mesNombre = new Date()
-        .toLocaleDateString('es-ES', { month: 'long' })
+        .toLocaleDateString("es-ES", { month: "long" })
         .toUpperCase();
       const fecha = `${mesNombre} ${new Date().getFullYear()}`;
 
-      const importeFmt = normalizarImporte(d.importe) || 'Por definir';
-      const viaFmt = d.via || 'Por definir';
+      const importeFmt = normalizarImporte(d.importe) || "Por definir";
+      const viaFmt = d.via || "Por definir";
 
       // ─── Reemplazos básicos (string-to-string) ───
       // Operamos sobre TODOS los XML del directorio /word: document.xml,
@@ -509,33 +527,34 @@ export default function Home() {
       // {{FECHA_DOCUMENTO}} vive en footer1.xml en la plantilla ESB).
       // Los reemplazos especiales con XML inyectado (TEXTO_OBJETIVO, LINEAS,
       // LOGO) se gestionan después con su lógica propia.
-      const camelToSnake = (s: string) => s.replace(/([A-Z])/g, '_$1').toUpperCase();
+      const camelToSnake = (s: string) =>
+        s.replace(/([A-Z])/g, "_$1").toUpperCase();
       const reemplazosBasicos: Record<string, string> = {
-        '{{FECHA}}': xmlEscape(fecha),
-        '{{NOMBRE_EMPRESA}}': xmlEscape(d.nombre.toUpperCase()),
-        '{{SECTOR}}': xmlEscape(d.sector),
-        '{{IMPORTE}}': xmlEscape(importeFmt),
-        '{{IMPORTE_CUERPO}}': xmlEscape(importeFmt),
-        '{{VIA}}': xmlEscape(viaFmt),
-        '{{VIA_CUERPO}}': xmlEscape(viaFmt),
+        "{{FECHA}}": xmlEscape(fecha),
+        "{{NOMBRE_EMPRESA}}": xmlEscape(d.nombre.toUpperCase()),
+        "{{SECTOR}}": xmlEscape(d.sector),
+        "{{IMPORTE}}": xmlEscape(importeFmt),
+        "{{IMPORTE_CUERPO}}": xmlEscape(importeFmt),
+        "{{VIA}}": xmlEscape(viaFmt),
+        "{{VIA_CUERPO}}": xmlEscape(viaFmt),
       };
       // Placeholders extra de tipos sin IA (camelCase → SNAKE_CASE).
       // Ej: 'fechaDocumento' → {{FECHA_DOCUMENTO}}.
       for (const [key, val] of Object.entries(d.extras || {})) {
-        if (key === 'nombre' || key === 'importe') continue;
+        if (key === "nombre" || key === "importe") continue;
         reemplazosBasicos[`{{${camelToSnake(key)}}}`] = xmlEscape(val);
       }
 
       // Aplicar a todos los XML del paquete bajo word/ (excepto los _rels y media)
       const archivosXml = Object.keys(zip.files).filter(
         (n) =>
-          n.startsWith('word/') &&
-          n.endsWith('.xml') &&
-          !n.includes('/_rels/') &&
-          !n.includes('/media/'),
+          n.startsWith("word/") &&
+          n.endsWith(".xml") &&
+          !n.includes("/_rels/") &&
+          !n.includes("/media/"),
       );
       for (const nombreXml of archivosXml) {
-        let contenido = await zip.file(nombreXml)!.async('string');
+        let contenido = await zip.file(nombreXml)!.async("string");
         let modificado = false;
         for (const [k, v] of Object.entries(reemplazosBasicos)) {
           if (contenido.includes(k)) {
@@ -549,7 +568,7 @@ export default function Home() {
       // ─── Reemplazos especiales en document.xml ───
       // TEXTO_OBJETIVO y LINEAS solo existen en plantillas con IA y solo
       // tienen sentido inyectarlos como XML rico, no como texto plano.
-      let xml = await zip.file('word/document.xml')!.async('string');
+      let xml = await zip.file("word/document.xml")!.async("string");
 
       // ─── TEXTO_OBJETIVO con soporte de **negritas** (solo si usa IA) ───
       if (tipoCfg.usaIA) {
@@ -562,17 +581,18 @@ export default function Home() {
           .map((p) => p.trim())
           .filter(Boolean);
 
-        let textoObjetivoXml = '';
+        let textoObjetivoXml = "";
         parrafos.forEach((p, i) => {
           const runs = buildRunsConNegritas(p, objProps);
           if (i === 0) textoObjetivoXml += `</w:t></w:r>${runs}`;
-          else textoObjetivoXml += `</w:p><w:p><w:pPr>${objPara}</w:pPr>${runs}`;
+          else
+            textoObjetivoXml += `</w:p><w:p><w:pPr>${objPara}</w:pPr>${runs}`;
         });
         if (parrafos.length > 1) {
           textoObjetivoXml += `<w:r><w:rPr>${objProps}</w:rPr><w:t xml:space="preserve">`;
         }
-        if (parrafos.length === 0) textoObjetivoXml = '';
-        xml = xml.split('{{TEXTO_OBJETIVO}}').join(textoObjetivoXml);
+        if (parrafos.length === 0) textoObjetivoXml = "";
+        xml = xml.split("{{TEXTO_OBJETIVO}}").join(textoObjetivoXml);
 
         // ─── LINEAS ───
         const linProps =
@@ -585,26 +605,28 @@ export default function Home() {
               ? xmlEscape(l)
               : `</w:t></w:r></w:p><w:p><w:pPr>${linPara}</w:pPr><w:r><w:rPr><w:b/><w:color w:val="C73E3A"/><w:sz w:val="22"/></w:rPr><w:t xml:space="preserve">• </w:t></w:r><w:r><w:rPr>${linProps}</w:rPr><w:t xml:space="preserve">${xmlEscape(l)}`,
           )
-          .join('');
-        xml = xml.split('{{LINEAS}}').join(lineasXml);
+          .join("");
+        xml = xml.split("{{LINEAS}}").join(lineasXml);
       }
 
-      zip.file('word/document.xml', xml);
+      zip.file("word/document.xml", xml);
 
       // ─── Logo de empresa en el header (con encaje proporcional) ───
-      let header = await zip.file('word/header1.xml')!.async('string');
+      let header = await zip.file("word/header1.xml")!.async("string");
 
       if (logoBytes && logoExt && logoDims) {
         const logoMediaFilename = `logo_empresa.${logoExt}`;
         zip.file(`word/media/${logoMediaFilename}`, logoBytes);
 
-        let rels = await zip.file('word/_rels/header1.xml.rels')!.async('string');
+        let rels = await zip
+          .file("word/_rels/header1.xml.rels")!
+          .async("string");
         if (!rels.includes(logoMediaFilename)) {
           rels = rels.replace(
-            '</Relationships>',
+            "</Relationships>",
             `  <Relationship Id="rId99" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/${logoMediaFilename}"/>\n</Relationships>`,
           );
-          zip.file('word/_rels/header1.xml.rels', rels);
+          zip.file("word/_rels/header1.xml.rels", rels);
         }
 
         // CALCULAR TAMAÑO REAL: encajar las dimensiones naturales del logo
@@ -625,32 +647,32 @@ export default function Home() {
           drawingXml,
         );
 
-        let ct = await zip.file('[Content_Types].xml')!.async('string');
+        let ct = await zip.file("[Content_Types].xml")!.async("string");
         const mimeForExt: Record<string, string> = {
-          png: 'image/png',
-          jpg: 'image/jpeg',
-          jpeg: 'image/jpeg',
+          png: "image/png",
+          jpg: "image/jpeg",
+          jpeg: "image/jpeg",
         };
         const mt = mimeForExt[logoExt];
         if (mt && !ct.includes(`Extension="${logoExt}"`)) {
           ct = ct.replace(
-            '</Types>',
+            "</Types>",
             `<Default Extension="${logoExt}" ContentType="${mt}"/></Types>`,
           );
-          zip.file('[Content_Types].xml', ct);
+          zip.file("[Content_Types].xml", ct);
         }
       } else {
-        header = header.split('{{LOGO}}').join('');
+        header = header.split("{{LOGO}}").join("");
       }
 
-      zip.file('word/header1.xml', header);
+      zip.file("word/header1.xml", header);
 
       const blob = await zip.generateAsync({
-        type: 'blob',
+        type: "blob",
         mimeType:
-          'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+          "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
       });
-      const nombreArchivo = `Propuesta_Integra_${d.nombre.replace(/\s+/g, '_').replace(/[^a-zA-Z0-9_-]/g, '')}.docx`;
+      const nombreArchivo = `Propuesta_Integra_${d.nombre.replace(/\s+/g, "_").replace(/[^a-zA-Z0-9_-]/g, "")}.docx`;
       saveAs(blob, nombreArchivo);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -662,8 +684,8 @@ export default function Home() {
 
   function copiarTexto() {
     navigator.clipboard.writeText(textoGenerado).then(() => {
-      setCopyLabel('¡Copiado!');
-      setTimeout(() => setCopyLabel('Copiar solo el texto'), 2000);
+      setCopyLabel("¡Copiado!");
+      setTimeout(() => setCopyLabel("Copiar solo el texto"), 2000);
     });
   }
 
@@ -684,10 +706,10 @@ export default function Home() {
     return (
       <div
         style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          minHeight: '100vh',
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          minHeight: "100vh",
           fontFamily: "'DM Sans', sans-serif",
         }}
       >
@@ -712,7 +734,9 @@ export default function Home() {
             <span>Fundación Íntegra</span>
           </div>
           <h2>Generador de propuestas</h2>
-          <p className="login-sub">Introduce la contraseña del equipo de alianzas.</p>
+          <p className="login-sub">
+            Introduce la contraseña del equipo de alianzas.
+          </p>
           <input
             type="password"
             value={passwordInput}
@@ -722,7 +746,7 @@ export default function Home() {
           />
           {authError && <div className="login-error">{authError}</div>}
           <button type="submit" disabled={authLoading || !passwordInput}>
-            {authLoading ? 'Verificando…' : 'Entrar'}
+            {authLoading ? "Verificando…" : "Entrar"}
           </button>
         </form>
       </div>
@@ -748,10 +772,10 @@ export default function Home() {
               Íntegra
             </span>
           </div>
-          <h2 style={{ marginTop: '2rem' }}>Generador de propuestas</h2>
-          <p style={{ marginTop: '.75rem' }}>
-            Rellena los datos, sube el logo de la empresa y descarga la propuesta en Word
-            lista para enviar.
+          <h2 style={{ marginTop: "2rem" }}>Generador de propuestas</h2>
+          <p style={{ marginTop: ".75rem" }}>
+            Rellena los datos, sube el logo de la empresa y descarga la
+            propuesta en Word lista para enviar.
           </p>
         </div>
 
@@ -773,8 +797,10 @@ export default function Home() {
             <div className="step">
               <div className="step-num">3</div>
               <div className="step-text">
-                <strong>{usaIA ? 'Genera' : 'Pulsa "Descargar"'}</strong>{' '}
-                {usaIA ? '→ la IA redacta la portada.' : '→ se rellena la plantilla.'}
+                <strong>{usaIA ? "Genera" : 'Pulsa "Descargar"'}</strong>{" "}
+                {usaIA
+                  ? "→ la IA redacta la portada."
+                  : "→ se rellena la plantilla."}
               </div>
             </div>
             <div className="step">
@@ -803,7 +829,7 @@ export default function Home() {
           {TIPOS_PROPUESTA_LIST.map((t) => (
             <button
               key={t.id}
-              className={`tipo-tab ${tipo === t.id ? 'active' : ''}`}
+              className={`tipo-tab ${tipo === t.id ? "active" : ""}`}
               onClick={() => setTipo(t.id)}
             >
               {t.label}
@@ -844,7 +870,10 @@ export default function Home() {
               <div className="grid2" style={{ marginTop: 14 }}>
                 <div className="field">
                   <label>Tamaño aproximado</label>
-                  <select value={tamano} onChange={(e) => setTamano(e.target.value)}>
+                  <select
+                    value={tamano}
+                    onChange={(e) => setTamano(e.target.value)}
+                  >
                     <option value="">— Sin especificar —</option>
                     <option>Pyme (hasta 50 personas)</option>
                     <option>Mediana (50–250 personas)</option>
@@ -854,7 +883,10 @@ export default function Home() {
                 </div>
                 <div className="field">
                   <label>Historial con Íntegra</label>
-                  <select value={historial} onChange={(e) => setHistorial(e.target.value)}>
+                  <select
+                    value={historial}
+                    onChange={(e) => setHistorial(e.target.value)}
+                  >
                     <option value="">Sin historial previo</option>
                     <option>Contacto inicial reciente</option>
                     <option>Ex socio / colaborador</option>
@@ -864,8 +896,10 @@ export default function Home() {
               </div>
               <div className="field" style={{ marginTop: 14 }}>
                 <label>
-                  Valores RSC / enfoque ESG{' '}
-                  <span style={{ fontWeight: 300, opacity: 0.7 }}>(si los conoces)</span>
+                  Valores RSC / enfoque ESG{" "}
+                  <span style={{ fontWeight: 300, opacity: 0.7 }}>
+                    (si los conoces)
+                  </span>
                 </label>
                 <textarea
                   value={valores}
@@ -892,7 +926,7 @@ export default function Home() {
                 {LINEAS_LIST.map((l) => (
                   <label
                     key={l.key}
-                    className={`linea-item ${lineasState[l.key] ? 'on' : ''}`}
+                    className={`linea-item ${lineasState[l.key] ? "on" : ""}`}
                     onClick={() => toggleLinea(l.key)}
                   >
                     <div className="linea-check" />
@@ -941,9 +975,16 @@ export default function Home() {
               <h3>Datos para la plantilla</h3>
             </div>
             <div className="card">
-              <p style={{ marginTop: 0, marginBottom: 14, opacity: 0.75, fontSize: 14 }}>
-                Esta propuesta usa una plantilla fija con texto predefinido. Solo necesitas
-                rellenar los siguientes datos:
+              <p
+                style={{
+                  marginTop: 0,
+                  marginBottom: 14,
+                  opacity: 0.75,
+                  fontSize: 14,
+                }}
+              >
+                Esta propuesta usa una plantilla fija con texto predefinido.
+                Solo necesitas rellenar los siguientes datos:
               </p>
               <CamposDinamicos
                 campos={tipoConfig.campos}
@@ -961,25 +1002,40 @@ export default function Home() {
         </div>
         <div className="card">
           <div className="field" style={{ margin: 0 }}>
-            <label>Sube el logo (PNG, JPG o SVG · recomendado fondo transparente)</label>
+            <label>
+              Sube el logo (PNG, JPG o SVG · recomendado fondo transparente)
+            </label>
             <div className="logo-upload-row">
               <label htmlFor="f-logo" className="logo-upload-btn">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <svg
+                  width="16"
+                  height="16"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                >
                   <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12" />
                 </svg>
-                <span>{logoBytes ? 'Cambiar archivo' : 'Seleccionar archivo'}</span>
+                <span>
+                  {logoBytes ? "Cambiar archivo" : "Seleccionar archivo"}
+                </span>
               </label>
               <input
                 type="file"
                 id="f-logo"
                 accept="image/png,image/jpeg,image/jpg,image/svg+xml"
-                style={{ display: 'none' }}
+                style={{ display: "none" }}
                 onChange={handleLogoFile}
               />
               {logoPreviewUrl && (
                 <div className="logo-preview-box">
                   <img src={logoPreviewUrl} alt="Logo" />
-                  <button type="button" className="logo-remove" onClick={removeLogo}>
+                  <button
+                    type="button"
+                    className="logo-remove"
+                    onClick={removeLogo}
+                  >
                     ×
                   </button>
                 </div>
@@ -988,12 +1044,14 @@ export default function Home() {
             <p className="logo-help">
               {logoBytes
                 ? `Logo cargado (${logoFilename}). Se encajará en una caja máx. 4×1.5 cm sin deformación.`
-                : 'Si no subes logo, el hueco quedará en blanco para añadirlo a mano después.'}
+                : "Si no subes logo, el hueco quedará en blanco para añadirlo a mano después."}
             </p>
           </div>
         </div>
 
-        {plantillaError && <div className="error-bar on">⚠️ {plantillaError}</div>}
+        {plantillaError && (
+          <div className="error-bar on">⚠️ {plantillaError}</div>
+        )}
         {error && <div className="error-bar on">{error}</div>}
 
         <button
@@ -1001,14 +1059,19 @@ export default function Home() {
           onClick={accionPrincipal}
           disabled={loading || downloading || !plantillaActivaLista}
         >
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+          >
             <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
           </svg>
           {usaIA
-            ? 'Generar propuesta completa'
+            ? "Generar propuesta completa"
             : downloading
-            ? 'Generando Word…'
-            : 'Generar y descargar Word'}
+              ? "Generando Word…"
+              : "Generar y descargar Word"}
         </button>
 
         {loading && (
@@ -1036,7 +1099,7 @@ export default function Home() {
                 onClick={() => descargarWord()}
                 disabled={downloading}
               >
-                {downloading ? 'Generando Word…' : 'Descargar Word completo'}
+                {downloading ? "Generando Word…" : "Descargar Word completo"}
               </button>
               <button className="btn-action" onClick={copiarTexto}>
                 {copyLabel}
@@ -1047,11 +1110,11 @@ export default function Home() {
             </div>
 
             <div className="info-callout">
-              <strong>Ya casi</strong> — Descarga el Word, revisa que todo esté correcto,
-              guárdalo como PDF y envíalo.{' '}
+              <strong>Ya casi</strong> — Descarga el Word, revisa que todo esté
+              correcto, guárdalo como PDF y envíalo.{" "}
               {logoBytes
-                ? 'El logo de la empresa ya viene integrado.'
-                : 'Recuerda añadir el logo de la empresa a mano antes de enviar.'}
+                ? "El logo de la empresa ya viene integrado."
+                : "Recuerda añadir el logo de la empresa a mano antes de enviar."}
             </div>
           </div>
         )}
@@ -1076,8 +1139,8 @@ function CamposDinamicos({
   const filas: CampoConfig[][] = [];
   let pendiente: CampoConfig | null = null;
   for (const c of campos) {
-    const ancho = c.ancho ?? 'medio';
-    if (ancho === 'completo') {
+    const ancho = c.ancho ?? "medio";
+    if (ancho === "completo") {
       if (pendiente) {
         filas.push([pendiente]);
         pendiente = null;
@@ -1099,14 +1162,14 @@ function CamposDinamicos({
       {filas.map((fila, idx) => (
         <div
           key={idx}
-          className={fila.length === 2 ? 'grid2' : ''}
+          className={fila.length === 2 ? "grid2" : ""}
           style={idx > 0 ? { marginTop: 14 } : undefined}
         >
           {fila.map((c) => (
             <CampoRender
               key={c.key}
               campo={c}
-              valor={valores[c.key] || ''}
+              valor={valores[c.key] || ""}
               onChange={(v) => onChange(c.key, v)}
             />
           ))}
@@ -1129,13 +1192,13 @@ function CampoRender({
   return (
     <div className="field">
       <label>{label}</label>
-      {campo.tipo === 'textarea' ? (
+      {campo.tipo === "textarea" ? (
         <textarea
           value={valor}
           onChange={(e) => onChange(e.target.value)}
           placeholder={campo.placeholder}
         />
-      ) : campo.tipo === 'select' ? (
+      ) : campo.tipo === "select" ? (
         <select value={valor} onChange={(e) => onChange(e.target.value)}>
           <option value="">— Selecciona —</option>
           {(campo.opciones || []).map((op) => (
@@ -1144,14 +1207,16 @@ function CampoRender({
         </select>
       ) : (
         <input
-          type={campo.tipo === 'number' ? 'number' : 'text'}
+          type={campo.tipo === "number" ? "number" : "text"}
           value={valor}
           onChange={(e) => onChange(e.target.value)}
           placeholder={campo.placeholder}
         />
       )}
       {campo.ayuda && (
-        <p style={{ marginTop: 6, fontSize: 12, opacity: 0.7 }}>{campo.ayuda}</p>
+        <p style={{ marginTop: 6, fontSize: 12, opacity: 0.7 }}>
+          {campo.ayuda}
+        </p>
       )}
     </div>
   );
