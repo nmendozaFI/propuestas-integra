@@ -266,3 +266,26 @@ select { appearance: none; background-image: url("data:image/svg+xml,%3Csvg xmln
   font-weight: 600;
   background-color: #f3f4f6;
 }
+
+
+
+.floating-button {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  z-index: 2000;
+  background-color: #111;
+  color: white;
+  padding: 0.6rem 1rem;
+  border-radius: 8px;
+  font-size: 0.9rem;
+  text-decoration: none;
+  font-weight: 500;
+
+  transition: background 0.2s, transform 0.1s;
+}
+
+.floating-button:hover {
+  background-color: #333;
+  transform: translateY(-1px);
+}

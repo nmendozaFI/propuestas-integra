@@ -20,6 +20,12 @@ export default function Navbar() {
       >
         Convenios
       </Link>
+     <Link
+        href="/plantillas"
+        className={pathname === '/plantillas' ? 'active' : ''}
+      >
+        Plantillas
+      </Link>
     </nav>
   );
 }
