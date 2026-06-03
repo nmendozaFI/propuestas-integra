@@ -402,17 +402,17 @@ export const TIPOS_CONVENIO: TipoConvenio[] = [
   {
     codigo: 'ENT-01',
     grupo: 'entidad',
-    label: 'Convenio colaboración inicial',
+    label: 'Convenio colaboración con entidad',
     plantilla: '/convenios/ENT-01.docx',
     campos: CAMPOS_COLABORACION,
   },
-  {
-    codigo: 'ENT-02',
-    grupo: 'entidad',
-    label: 'Convenio colaboración existente',
-    plantilla: '/convenios/ENT-02.docx',
-    campos: CAMPOS_COLABORACION,
-  },
+  // {
+  //   codigo: 'ENT-02',
+  //   grupo: 'entidad',
+  //   label: 'Convenio colaboración existente',
+  //   plantilla: '/convenios/ENT-02.docx',
+  //   campos: CAMPOS_COLABORACION,
+  // },
 ];
 
 // ─── Helpers para la UI ───
