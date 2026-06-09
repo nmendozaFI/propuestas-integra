@@ -53,12 +53,51 @@ function xmlEscape(s: string): string {
     .replace(/>/g, "&gt;");
 }
 
-function normalizarImporte(raw: string): string {
-  if (!raw) return "";
-  const s = String(raw).trim();
-  if (/€|eur|euro/i.test(s)) return s;
-  if (/^[\d.,\s]+$/.test(s)) return s.trim() + "€";
-  return s;
+function normalizarImporte(raw?: string): string {
+  if (!raw) return '';
+
+  let s = String(raw).trim();
+  if (!s) return '';
+
+  const tieneEuro = /€|euros?/i.test(s);
+
+  s = s
+    .replace(/€/g, '')
+    .replace(/euros?/gi, '')
+    .replace(/\s+/g, '')
+    .trim();
+
+  if (!s) return '';
+
+  const ultimoPunto = s.lastIndexOf('.');
+  const ultimaComa = s.lastIndexOf(',');
+
+  let normalizado = s;
+
+  if (ultimaComa > ultimoPunto) {
+    normalizado = s.replace(/\./g, '').replace(',', '.');
+  } else if (ultimoPunto > ultimaComa) {
+    const decimales = s.length - ultimoPunto - 1;
+    if (decimales === 3 && s.indexOf(',') === -1) {
+      normalizado = s.replace(/\./g, '');
+    } else {
+      normalizado = s.replace(/,/g, '');
+    }
+  } else {
+    normalizado = s.replace(/[.,]/g, '');
+  }
+
+  const n = Number(normalizado);
+  if (!Number.isFinite(n)) return raw.trim();
+
+  const tieneDecimales = !Number.isInteger(n);
+
+  const formateado = new Intl.NumberFormat('es-ES', {
+    minimumFractionDigits: tieneDecimales ? 2 : 0,
+    maximumFractionDigits: tieneDecimales ? 2 : 2,
+  }).format(n);
+
+  return tieneEuro ? `${formateado} €` : formateado;
 }
 
 /**
