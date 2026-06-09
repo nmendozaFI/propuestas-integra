@@ -135,7 +135,7 @@ INSTRUCCIONES DE FORMATO (idénticas para todos los tipos):
 
 const datosEmpresaBlock = (v: PromptVars) => `DATOS EMPRESA:
 - Nombre: ${v.nombre}
-- Sector: ${v.sector}${v.tamano ? `\n- Tamaño: ${v.tamano}` : ''}${v.historial ? `\n- Historial con Íntegra: ${v.historial}` : ''}${v.valores ? `\n- Valores RSC: ${v.valores}` : ''}${v.contexto ? `\n- Contexto: ${v.contexto}` : ''}`;
+- Sector: ${v.sector}${v.tamano ? `\n- Tamaño: ${v.tamano}` : ''}${v.historial ? `\n- Historial con Integra: ${v.historial}` : ''}${v.valores ? `\n- Valores RSC: ${v.valores}` : ''}${v.contexto ? `\n- Contexto: ${v.contexto}` : ''}`;
 
 // ═══════════════════════════════════════════════════════════════════════
 // CAMPOS REUTILIZABLES
@@ -161,7 +161,7 @@ const CAMPO_IMPORTE: CampoConfig = {
 export const TIPOS_PROPUESTA: Record<TipoPropuestaId, TipoPropuesta> = {
   socios: {
     id: 'socios',
-    label: 'Socios Compromiso Íntegra 2026',
+    label: 'Socios Compromiso Integra 2026',
     plantilla: '/plantilla-integra.docx',
     usaIA: true,
     campos: [],
@@ -171,7 +171,7 @@ export const TIPOS_PROPUESTA: Record<TipoPropuestaId, TipoPropuesta> = {
         ? v.lineas.map(l => `  - "${l}"`).join('\n')
         : '  - (colaboración general, sin líneas específicas)';
 
-      return `Eres el equipo de alianzas de Fundación Íntegra, fundación española de inserción laboral de personas vulnerables. Redactas una PROPUESTA ESTRATÉGICA para que ${v.nombre} se convierta en socio de la Red Compromiso Íntegra 2026 — una red de empresas referentes que apuestan por el empleo socialmente responsable como parte de su estrategia ESG.
+      return `Eres el equipo de alianzas de Fundación Integra, fundación española de inserción laboral de personas vulnerables. Redactas una PROPUESTA ESTRATÉGICA para que ${v.nombre} se convierta en socio de la Red Compromiso Integra 2026 — una red de empresas referentes que apuestan por el empleo socialmente responsable como parte de su estrategia ESG.
 
 ${datosEmpresaBlock(v)}
 
@@ -187,7 +187,7 @@ ENFOQUE ESTRATÉGICO (ESG avanzado + red de pares):
 - Tono de alianza de largo plazo, no de proveedor-cliente. Hablamos entre iguales.
 - Vocabulario estratégico: "alianza", "compromiso de largo plazo", "posicionamiento ESG", "capital reputacional", "liderazgo sectorial".
 - Conecta explícitamente con la dimensión Social del ESG y con la CSRD/reportes de sostenibilidad.
-- Menciona que la Red Compromiso Íntegra agrupa a empresas referentes del sector.
+- Menciona que la Red Compromiso Integra agrupa a empresas referentes del sector.
 - Enmarca la inclusión laboral como ventaja competitiva, no como obligación.
 - Cierre con visión 2026+: invitación a construir algo conjunto y medible.
 - NO uses lenguaje de cumplimiento normativo.
