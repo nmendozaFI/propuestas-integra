@@ -125,7 +125,7 @@ export async function POST(request: NextRequest) {
 
   // 5) Llamar a Anthropic con retry para errores transitorios
   const result = await callAnthropicWithRetry(apiKey, {
-    model: 'claude-sonnet-4-5-20250929',
+    model: 'claude-sonnet-4-6',
     max_tokens: 1500,
     messages: [{ role: 'user', content: prompt }],
   });
