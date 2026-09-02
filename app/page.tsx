@@ -54,37 +54,37 @@ function xmlEscape(s: string): string {
 }
 
 function normalizarImporte(raw?: string): string {
-  if (!raw) return '';
+  if (!raw) return "";
 
   let s = String(raw).trim();
-  if (!s) return '';
+  if (!s) return "";
 
   const tieneEuro = /€|euros?/i.test(s);
 
   s = s
-    .replace(/€/g, '')
-    .replace(/euros?/gi, '')
-    .replace(/\s+/g, '')
+    .replace(/€/g, "")
+    .replace(/euros?/gi, "")
+    .replace(/\s+/g, "")
     .trim();
 
-  if (!s) return '';
+  if (!s) return "";
 
-  const ultimoPunto = s.lastIndexOf('.');
-  const ultimaComa = s.lastIndexOf(',');
+  const ultimoPunto = s.lastIndexOf(".");
+  const ultimaComa = s.lastIndexOf(",");
 
   let normalizado = s;
 
   if (ultimaComa > ultimoPunto) {
-    normalizado = s.replace(/\./g, '').replace(',', '.');
+    normalizado = s.replace(/\./g, "").replace(",", ".");
   } else if (ultimoPunto > ultimaComa) {
     const decimales = s.length - ultimoPunto - 1;
-    if (decimales === 3 && s.indexOf(',') === -1) {
-      normalizado = s.replace(/\./g, '');
+    if (decimales === 3 && s.indexOf(",") === -1) {
+      normalizado = s.replace(/\./g, "");
     } else {
-      normalizado = s.replace(/,/g, '');
+      normalizado = s.replace(/,/g, "");
     }
   } else {
-    normalizado = s.replace(/[.,]/g, '');
+    normalizado = s.replace(/[.,]/g, "");
   }
 
   const n = Number(normalizado);
@@ -92,7 +92,7 @@ function normalizarImporte(raw?: string): string {
 
   const tieneDecimales = !Number.isInteger(n);
 
-  const formateado = new Intl.NumberFormat('es-ES', {
+  const formateado = new Intl.NumberFormat("es-ES", {
     minimumFractionDigits: tieneDecimales ? 2 : 0,
     maximumFractionDigits: tieneDecimales ? 2 : 2,
   }).format(n);
@@ -650,62 +650,74 @@ export default function Home() {
 
       zip.file("word/document.xml", xml);
 
-      // ─── Logo de empresa en el header (con encaje proporcional) ───
-      let header = await zip.file("word/header1.xml")!.async("string");
+     // ─── Logo de empresa: buscar {{LOGO}} en CUALQUIER headerN.xml ───
 
-      if (logoBytes && logoExt && logoDims) {
-        const logoMediaFilename = `logo_empresa.${logoExt}`;
-        zip.file(`word/media/${logoMediaFilename}`, logoBytes);
+// Une placeholders que Word haya partido en varios runs.
+const unirPlaceholders = (xml: string) =>
+  xml.replace(/\{\{[^{}]*?\}\}/g, (m) =>
+    m.includes("<") ? m.replace(/<[^>]*>/g, "") : m,
+  );
 
-        let rels = await zip
-          .file("word/_rels/header1.xml.rels")!
-          .async("string");
-        if (!rels.includes(logoMediaFilename)) {
-          rels = rels.replace(
-            "</Relationships>",
-            `  <Relationship Id="rId99" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/${logoMediaFilename}"/>\n</Relationships>`,
-          );
-          zip.file("word/_rels/header1.xml.rels", rels);
-        }
+const nombresHeaders = Object.keys(zip.files).filter((n) =>
+  /^word\/header\d+\.xml$/.test(n),
+);
 
-        // CALCULAR TAMAÑO REAL: encajar las dimensiones naturales del logo
-        // dentro de la caja máxima (4cm × 1.5cm) sin deformar.
-        // Esto evita los logos estirados horizontalmente que aparecían
-        // antes (caso Grupo Bimbo: ratio 2:1 forzado a ratio 10:3 = estirado).
-        const { w: cx, h: cy } = fitInBox(
-          logoDims.w,
-          logoDims.h,
-          LOGO_CAJA_W_EMU,
-          LOGO_CAJA_H_EMU,
-        );
+const headersContenido: Record<string, string> = {};
+let headerLogo = "";
+for (const n of nombresHeaders) {
+  const c = unirPlaceholders(await zip.file(n)!.async("string"));
+  headersContenido[n] = c;
+  if (!headerLogo && c.includes("{{LOGO}}")) headerLogo = n;
+}
 
-        const drawingXml = `<w:r><w:rPr><w:noProof/></w:rPr><w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0"><wp:extent cx="${cx}" cy="${cy}"/><wp:effectExtent l="0" t="0" r="0" b="0"/><wp:docPr id="101" name="LogoEmpresa"/><wp:cNvGraphicFramePr><a:graphicFrameLocks xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" noChangeAspect="1"/></wp:cNvGraphicFramePr><a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:nvPicPr><pic:cNvPr id="101" name="LogoEmpresa"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed="rId99"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r>`;
+if (logoBytes && logoExt && logoDims && headerLogo) {
+  const logoMediaFilename = `logo_empresa.${logoExt}`;
+  zip.file(`word/media/${logoMediaFilename}`, logoBytes);
 
-        header = header.replace(
-          /<w:r>(?:(?!<\/w:r>).)*?\{\{LOGO\}\}[^<]*<\/w:t><\/w:r>/,
-          drawingXml,
-        );
+  // El .rels puede no existir si ese header no tenía relaciones.
+  const relsPath = `word/_rels/${headerLogo.replace("word/", "")}.rels`;
+  const relsFile = zip.file(relsPath);
+  let rels = relsFile
+    ? await relsFile.async("string")
+    : `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"></Relationships>`;
 
-        let ct = await zip.file("[Content_Types].xml")!.async("string");
-        const mimeForExt: Record<string, string> = {
-          png: "image/png",
-          jpg: "image/jpeg",
-          jpeg: "image/jpeg",
-        };
-        const mt = mimeForExt[logoExt];
-        if (mt && !ct.includes(`Extension="${logoExt}"`)) {
-          ct = ct.replace(
-            "</Types>",
-            `<Default Extension="${logoExt}" ContentType="${mt}"/></Types>`,
-          );
-          zip.file("[Content_Types].xml", ct);
-        }
-      } else {
-        header = header.split("{{LOGO}}").join("");
-      }
+  // rId libre en ESE header (rId99 fijo puede colisionar).
+  const usados = [...rels.matchAll(/Id="rId(\d+)"/g)].map((m) => Number(m[1]));
+  const rid = `rId${usados.length ? Math.max(...usados) + 1 : 1}`;
 
-      zip.file("word/header1.xml", header);
+  if (!rels.includes(logoMediaFilename)) {
+    rels = rels.replace(
+      "</Relationships>",
+      `<Relationship Id="${rid}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/${logoMediaFilename}"/></Relationships>`,
+    );
+  }
+  zip.file(relsPath, rels);
 
+  const { w: cx, h: cy } = fitInBox(
+    logoDims.w, logoDims.h, LOGO_CAJA_W_EMU, LOGO_CAJA_H_EMU,
+  );
+
+  const drawingXml = `<w:r><w:rPr><w:noProof/></w:rPr><w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0"><wp:extent cx="${cx}" cy="${cy}"/><wp:effectExtent l="0" t="0" r="0" b="0"/><wp:docPr id="101" name="LogoEmpresa"/><wp:cNvGraphicFramePr><a:graphicFrameLocks xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" noChangeAspect="1"/></wp:cNvGraphicFramePr><a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:nvPicPr><pic:cNvPr id="101" name="LogoEmpresa"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed="${rid}"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r>`;
+
+  // Partimos el run en vez de casarlo con regex: funciona con <w:r> y con
+  // <w:r w:rsidRPr="..."> (el caso de empleo-sin-barreras).
+  headersContenido[headerLogo] = headersContenido[headerLogo]
+    .split("{{LOGO}}")
+    .join(`</w:t></w:r>${drawingXml}<w:r><w:t xml:space="preserve">`);
+
+  let ct = await zip.file("[Content_Types].xml")!.async("string");
+  const mimeForExt: Record<string, string> = { png: "image/png", jpg: "image/jpeg" };
+  const mt = mimeForExt[logoExt];
+  if (mt && !ct.includes(`Extension="${logoExt}"`)) {
+    ct = ct.replace("</Types>", `<Default Extension="${logoExt}" ContentType="${mt}"/></Types>`);
+    zip.file("[Content_Types].xml", ct);
+  }
+}
+
+// Escribir todos los headers, limpiando cualquier {{LOGO}} sobrante
+for (const [n, c] of Object.entries(headersContenido)) {
+  zip.file(n, c.split("{{LOGO}}").join(""));
+}
       const blob = await zip.generateAsync({
         type: "blob",
         mimeType:

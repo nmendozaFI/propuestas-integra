@@ -51,7 +51,7 @@ const camelToSnake = (s: string): string =>
  * (Asume que las llaves de apertura/cierre no están partidas entre sí,
  * que es el caso habitual.)
  */
-function unirPlaceholders(xml: string): string {
+export function unirPlaceholders(xml: string): string {
   return xml.replace(/\{\{[^{}]*?\}\}/g, (m) => m.replace(/<[^>]+>/g, ''));
 }
 
