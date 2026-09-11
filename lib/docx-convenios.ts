@@ -12,6 +12,11 @@
 //   3. El logo se busca en CUALQUIER word/headerN.xml (en propuestas vivía solo
 //      en header1; en los convenios vive en el header de portada, header2).
 //
+// TODOS LOS CAMPOS SON OPCIONALES. Un campo vacío (o solo con espacios) NO se
+// sustituye: su placeholder queda para el barrido final, que lo convierte en una
+// línea para rellenar a mano ("__________"). Así nunca queda ni un {{PLACEHOLDER}}
+// literal ni un hueco vacío en el Word.
+//
 // Cuando se unifiquen ambos flujos, esta lógica puede ser la base común.
 // ═══════════════════════════════════════════════════════════════════════
 
@@ -21,6 +26,9 @@ import JSZip from 'jszip';
 const EMU_POR_CM = 914400 / 2.54;
 export const LOGO_CAJA_W_EMU = Math.round(4.0 * EMU_POR_CM); // ≈ 1440945 (4 cm)
 export const LOGO_CAJA_H_EMU = Math.round(1.5 * EMU_POR_CM); // ≈ 540354  (1,5 cm)
+
+// Línea en blanco para los campos que se dejen vacíos (se rellenan a mano en Word).
+export const LINEA_BLANCO = '__________';
 
 export type LogoData = {
   bytes: Uint8Array;
@@ -53,6 +61,16 @@ const camelToSnake = (s: string): string =>
  */
 export function unirPlaceholders(xml: string): string {
   return xml.replace(/\{\{[^{}]*?\}\}/g, (m) => m.replace(/<[^>]+>/g, ''));
+}
+
+/**
+ * Barrido final: cualquier placeholder {{SNAKE_CASE}} que quede sin sustituir
+ * (campo dejado vacío, campo no tocado o placeholder huérfano de la plantilla)
+ * se convierte en una línea para rellenar a mano. {{LOGO}} se excluye: lo
+ * gestiona `inyectarLogo` (que ya se ha ejecutado antes del barrido).
+ */
+export function barrerTokensRestantes(xml: string): string {
+  return xml.replace(/\{\{[A-Z0-9_]+\}\}/g, (m) => (m === '{{LOGO}}' ? m : LINEA_BLANCO));
 }
 
 export function fitInBox(
@@ -235,21 +253,30 @@ export async function rellenarConvenio(opts: {
   const zip = await JSZip.loadAsync(plantillaBytes);
 
   // ─── Importe (cifra formateada + letras) ───
-  const impNum = parseImporteNum(datos.importe || '');
-  const importeFmt = impNum !== null ? impNum.toLocaleString('es-ES') : (datos.importe || '').trim() || 'Por definir';
-  const importeLetras = impNum !== null ? numeroALetras(impNum) : 'POR DEFINIR';
+  // Vacío → no se sustituye (queda para el barrido → línea en blanco).
+  // Numérico → cifra formateada + importe en letras.
+  // Con texto no numérico → se usa tal cual; las letras quedan para el barrido.
+  const importeRaw = (datos.importe || '').trim();
+  const impNum = parseImporteNum(importeRaw);
 
   // ─── Mapa de reemplazos {{SNAKE_CASE}} → valor ───
-  const reemplazos: Record<string, string> = {
-    '{{IMPORTE}}': xmlEscape(importeFmt),
-    '{{IMPORTE_LETRAS}}': xmlEscape(importeLetras),
-  };
+  const reemplazos: Record<string, string> = {};
+  if (impNum !== null) {
+    reemplazos['{{IMPORTE}}'] = xmlEscape(impNum.toLocaleString('es-ES'));
+    reemplazos['{{IMPORTE_LETRAS}}'] = xmlEscape(numeroALetras(impNum));
+  } else if (importeRaw) {
+    reemplazos['{{IMPORTE}}'] = xmlEscape(importeRaw);
+    // {{IMPORTE_LETRAS}} se deja al barrido (línea en blanco)
+  }
   for (const [key, val] of Object.entries(datos)) {
     if (key === 'importe') continue; // gestionado arriba
-    reemplazos[`{{${camelToSnake(key)}}}`] = xmlEscape((val || '').trim());
+    const v = (val || '').trim();
+    if (!v) continue; // vacío → se deja al barrido (línea en blanco)
+    reemplazos[`{{${camelToSnake(key)}}}`] = xmlEscape(v);
   }
 
-  // ─── Aplicar a todos los XML bajo word/ (excepto _rels y media) ───
+  // ─── Partes XML sobre las que actúan tanto los reemplazos como el barrido ───
+  // (document, headers, footers… todo bajo word/, excepto _rels y media).
   const archivosXml = Object.keys(zip.files).filter(
     (n) =>
       n.startsWith('word/') &&
@@ -257,6 +284,8 @@ export async function rellenarConvenio(opts: {
       !n.includes('/_rels/') &&
       !n.includes('/media/'),
   );
+
+  // ─── 1) Aplicar reemplazos ───
   for (const nombreXml of archivosXml) {
     const original = await zip.file(nombreXml)!.async('string');
     let contenido = unirPlaceholders(original); // recompone los partidos por Word
@@ -266,8 +295,17 @@ export async function rellenarConvenio(opts: {
     if (contenido !== original) zip.file(nombreXml, contenido);
   }
 
-  // ─── Logo en el header de portada ───
+  // ─── 2) Logo en el header de portada (gestiona y limpia {{LOGO}}) ───
   await inyectarLogo(zip, logo);
+
+  // ─── 3) Barrido final: tokens sin sustituir → línea en blanco ───
+  // Recorre EXACTAMENTE las mismas partes que los reemplazos (incluidas
+  // cabeceras y pies), después del logo para no pisar {{LOGO}}.
+  for (const nombreXml of archivosXml) {
+    const original = await zip.file(nombreXml)!.async('string');
+    const contenido = barrerTokensRestantes(unirPlaceholders(original));
+    if (contenido !== original) zip.file(nombreXml, contenido);
+  }
 
   return zip.generateAsync({
     type: 'blob',

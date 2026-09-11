@@ -441,10 +441,10 @@ function FilaPlantilla({
 // ─── Estilos inline (en línea con migaStyle/tarjeta* del resto de la app) ───
 const botonSecundario: React.CSSProperties = {
   background: '#fff', border: '1px solid #e0e0e0', borderRadius: 10, padding: '8px 14px',
-  fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit', color: '#1a1a1a',
+  fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit', color: 'var(--text)',
 };
 const enlace: React.CSSProperties = {
-  background: 'none', border: 'none', padding: 0, color: '#C73E3A', cursor: 'pointer',
+  background: 'none', border: 'none', padding: 0, color: 'var(--marca-rojo)', cursor: 'pointer',
   fontSize: 13, fontFamily: 'inherit', textDecoration: 'underline',
 };
 const insigniaAjuste: React.CSSProperties = {

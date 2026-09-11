@@ -1,31 +1,37 @@
-  import type { Metadata } from 'next';
-  import './globals.css';
-  import Navbar from '@/components/Navbar';
+import type { Metadata } from 'next';
+import { Roboto } from 'next/font/google';
+import './globals.css';
+import Navbar from '@/components/Navbar';
 
-  export const metadata: Metadata = {
-    title: 'Generador de propuestas · Fundación Íntegra',
-    description: 'Equipo · Fundación Íntegra',
-  };
+// Tipografía de marca (Roboto), autoalojada por next/font.
+const roboto = Roboto({
+  subsets: ['latin'],
+  weight: ['300', '400', '500', '700'],
+  variable: '--font-roboto',
+  display: 'swap',
+});
 
-  export default function RootLayout({
-    children,
-  }: {
-    children: React.ReactNode;
-  }) {
-    return (
-      <html lang="es">
-        <head>
-          <link rel="preconnect" href="https://fonts.googleapis.com" />
-          <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
-          <link
-            href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;600&family=DM+Sans:wght@300;400;500&display=swap"
-            rel="stylesheet"
-          />
-        </head>
-        <body>
+const siteUrl =
+  process.env.NEXT_PUBLIC_SITE_URL ||
+  (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000');
+
+export const metadata: Metadata = {
+  metadataBase: new URL(siteUrl),
+  title: 'Generador de propuestas · Fundación Íntegra',
+  description: 'Equipo · Fundación Íntegra',
+};
+
+export default function RootLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
+  return (
+    <html lang="es" className={roboto.variable}>
+      <body>
         <Navbar />
         {children}
-        </body>
-      </html>
-    );
-  }
+      </body>
+    </html>
+  );
+}

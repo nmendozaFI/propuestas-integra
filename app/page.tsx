@@ -761,7 +761,7 @@ for (const [n, c] of Object.entries(headersContenido)) {
           alignItems: "center",
           justifyContent: "center",
           minHeight: "100vh",
-          fontFamily: "'DM Sans', sans-serif",
+          fontFamily: "var(--font-cuerpo)",
         }}
       >
         <div className="spinner-ring" />

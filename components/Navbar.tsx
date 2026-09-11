@@ -6,6 +6,12 @@ import { usePathname } from 'next/navigation';
 export default function Navbar() {
   const pathname = usePathname();
 
+  // La ruta pública de la empresa (/convenio/…) no lleva la barra de navegación
+  // interna. OJO: no confundir con /convenios (índice interno), que sí la lleva.
+  if (pathname === '/convenio' || pathname.startsWith('/convenio/')) {
+    return null;
+  }
+
   return (
     <nav className="navbar">
       <Link
@@ -16,7 +22,7 @@ export default function Navbar() {
       </Link>
       <Link
         href="/convenios"
-        className={pathname === '/convenios' ? 'active' : ''}
+        className={pathname.startsWith('/convenios') ? 'active' : ''}
       >
         Convenios
       </Link>
