@@ -1,20 +1,32 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { TIPOS_PROPUESTA, type TipoPropuestaId } from '@/lib/tipos-propuesta';
+import {
+  TIPOS_PROPUESTA,
+  buildPromptActa,
+  buildPromptEmail,
+  type TipoPropuestaId,
+} from '@/lib/tipos-propuesta';
 
 // Ejecutar como Node runtime (no edge) — usamos fetch nativo, no SDK
 export const runtime = 'nodejs';
 
+// Tarea que pide el cliente. Por defecto 'propuesta' (retrocompatible).
+type Tarea = 'propuesta' | 'acta' | 'email';
+
 type Body = {
-  nombre: string;
-  sector: string;
+  nombre?: string;
+  sector?: string;
   tamano?: string;
   historial?: string;
   valores?: string;
   contexto?: string;
-  lineas: string[];
+  acta?: string;
+  lineas?: string[];
   importe?: string;
   via?: string;
-  tipo: TipoPropuestaId;
+  tipo?: TipoPropuestaId;
+  tarea?: Tarea;
+  transcripcion?: string;
+  textoPropuesta?: string;
 };
 
 // ─── Retry con backoff exponencial para errores transitorios de Anthropic ───
@@ -98,35 +110,72 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Body inválido' }, { status: 400 });
   }
 
-  const { nombre, sector, tamano, historial, valores, contexto, lineas, tipo } = data;
-  if (!nombre || !sector) {
-    return NextResponse.json(
-      { error: 'Faltan campos obligatorios (nombre, sector)' },
-      { status: 400 },
-    );
+  const tarea: Tarea = data.tarea ?? 'propuesta';
+
+  // 4) Construir el prompt según la tarea
+  let prompt: string;
+  let maxTokens = 1500;
+
+  if (tarea === 'acta') {
+    // Transcripción de reunión → acta
+    const transcripcion = (data.transcripcion ?? '').trim();
+    if (!transcripcion) {
+      return NextResponse.json(
+        { error: 'Falta la transcripción para generar el acta' },
+        { status: 400 },
+      );
+    }
+    prompt = buildPromptActa(transcripcion);
+    maxTokens = 1600;
+  } else if (tarea === 'email') {
+    // Email de acompañamiento
+    const nombre = (data.nombre ?? '').trim();
+    if (!nombre) {
+      return NextResponse.json(
+        { error: 'Falta el nombre de la empresa para generar el email' },
+        { status: 400 },
+      );
+    }
+    prompt = buildPromptEmail({
+      nombre,
+      sector: (data.sector ?? '').trim(),
+      lineas: data.lineas ?? [],
+      importe: data.importe,
+      via: data.via,
+      acta: data.acta,
+      textoPropuesta: data.textoPropuesta,
+    });
+    maxTokens = 900;
+  } else {
+    // Propuesta (comportamiento por defecto)
+    const nombre = (data.nombre ?? '').trim();
+    const sector = (data.sector ?? '').trim();
+    if (!nombre || !sector) {
+      return NextResponse.json(
+        { error: 'Faltan campos obligatorios (nombre, sector)' },
+        { status: 400 },
+      );
+    }
+    const tipoConfig = TIPOS_PROPUESTA[data.tipo as TipoPropuestaId] ?? TIPOS_PROPUESTA['empleo-sin-barreras'];
+    if (!tipoConfig || typeof tipoConfig.buildPrompt !== 'function') {
+      return NextResponse.json({ error: 'Tipo de propuesta inválido' }, { status: 400 });
+    }
+    prompt = tipoConfig.buildPrompt({
+      nombre,
+      sector,
+      tamano: data.tamano,
+      historial: data.historial,
+      valores: data.valores,
+      contexto: data.contexto,
+      acta: data.acta,
+      lineas: data.lineas ?? [],
+    });
   }
-
-  // 4) Obtener config del tipo y construir prompt
-  const tipoConfig = TIPOS_PROPUESTA[tipo] ?? TIPOS_PROPUESTA['empleo-sin-barreras'];
-
-  if (!tipoConfig || typeof tipoConfig.buildPrompt !== 'function') {
-    return NextResponse.json({ error: 'Tipo de propuesta inválido' }, { status: 400 });
-  }
-
-  const prompt = tipoConfig.buildPrompt({
-    nombre,
-    sector,
-    tamano,
-    historial,
-    valores,
-    contexto,
-    lineas,
-  });
 
   // 5) Llamar a Anthropic con retry para errores transitorios
   const result = await callAnthropicWithRetry(apiKey, {
     model: 'claude-sonnet-4-6',
-    max_tokens: 1500,
+    max_tokens: maxTokens,
     messages: [{ role: 'user', content: prompt }],
   });
 

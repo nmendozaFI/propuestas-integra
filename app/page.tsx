@@ -23,6 +23,7 @@ type DatosGeneracion = {
   historial: string;
   valores: string;
   contexto: string;
+  acta: string;
   importe: string;
   via: string;
   lineas: string[]; // frases canónicas de las líneas seleccionadas
@@ -228,6 +229,121 @@ function rasterizarSvg(svgText: string): Promise<{
   });
 }
 
+/**
+ * Extrae el texto plano de un archivo .docx o .txt subido por el usuario.
+ * Todo ocurre en el navegador (no se sube nada al servidor).
+ *  - .txt → se lee tal cual.
+ *  - .docx → se descomprime con JSZip y se juntan los <w:t> por párrafo (<w:p>).
+ */
+async function extraerTextoArchivo(file: File): Promise<string> {
+  const name = (file.name || "").toLowerCase();
+
+  if (name.endsWith(".txt") || file.type === "text/plain") {
+    return (await file.text()).trim();
+  }
+
+  if (
+    name.endsWith(".docx") ||
+    file.type ===
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+  ) {
+    const zip = await JSZip.loadAsync(await file.arrayBuffer());
+    const docFile = zip.file("word/document.xml");
+    if (!docFile) throw new Error("El .docx no parece válido (sin document.xml)");
+    const xml = await docFile.async("string");
+    const parrafos = xml.split(/<w:p[ >]/).slice(1);
+    const lineas = parrafos.map((p) =>
+      [...p.matchAll(/<w:t[^>]*>([^<]*)<\/w:t>/g)].map((m) => m[1]).join(""),
+    );
+    const texto = lineas
+      .join("\n")
+      .replace(/&amp;/g, "&")
+      .replace(/&lt;/g, "<")
+      .replace(/&gt;/g, ">")
+      .replace(/&quot;/g, '"')
+      .replace(/&apos;/g, "'")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
+    return texto;
+  }
+
+  throw new Error("Formato no soportado. Usa .docx o .txt");
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// ACTA → WORD (.docx) con formato
+// Construye un .docx mínimo pero válido desde cero (sin plantilla): título,
+// secciones (**negrita** → encabezado rojo de marca), viñetas y espaciado.
+// ═══════════════════════════════════════════════════════════════════════
+const ACTA_CONTENT_TYPES = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>`;
+
+const ACTA_RELS = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>`;
+
+// Convierte un texto con **negritas** en runs de Word.
+function actaRuns(texto: string, baseRPr: string): string {
+  return texto
+    .split(/\*\*(.+?)\*\*/g)
+    .map((parte, i) => {
+      if (!parte) return "";
+      const bold = i % 2 === 1 ? "<w:b/><w:bCs/>" : "";
+      return `<w:r><w:rPr>${baseRPr}${bold}</w:rPr><w:t xml:space="preserve">${xmlEscape(parte)}</w:t></w:r>`;
+    })
+    .join("");
+}
+
+async function construirActaDocx(acta: string, empresa: string): Promise<Blob> {
+  const RED = "D22837"; // rojo de marca
+  const INK = "2D2E33";
+  const fuente =
+    '<w:rFonts w:ascii="Calibri" w:hAnsi="Calibri" w:cs="Calibri"/>';
+  const bodyR = `${fuente}<w:color w:val="${INK}"/><w:sz w:val="22"/><w:szCs w:val="22"/>`;
+  const headR = `${fuente}<w:b/><w:bCs/><w:color w:val="${RED}"/><w:sz w:val="24"/><w:szCs w:val="24"/>`;
+  const titleR = `${fuente}<w:b/><w:bCs/><w:color w:val="${RED}"/><w:sz w:val="34"/><w:szCs w:val="34"/>`;
+
+  const paras: string[] = [];
+  const titulo = empresa ? `Acta de reunión · ${empresa}` : "Acta de reunión";
+  paras.push(
+    `<w:p><w:pPr><w:spacing w:after="240"/></w:pPr><w:r><w:rPr>${titleR}</w:rPr><w:t xml:space="preserve">${xmlEscape(titulo)}</w:t></w:r></w:p>`,
+  );
+
+  for (const raw of acta.replace(/\r/g, "").split("\n")) {
+    const line = raw.trim();
+    if (!line) continue;
+
+    const heading = line.match(/^\*\*(.+?)\*\*:?\s*$/);
+    if (heading) {
+      paras.push(
+        `<w:p><w:pPr><w:spacing w:before="200" w:after="80"/></w:pPr><w:r><w:rPr>${headR}</w:rPr><w:t xml:space="preserve">${xmlEscape(heading[1])}</w:t></w:r></w:p>`,
+      );
+      continue;
+    }
+
+    const bullet = line.match(/^[-*•]\s+(.*)$/);
+    if (bullet) {
+      paras.push(
+        `<w:p><w:pPr><w:spacing w:after="80" w:line="276" w:lineRule="auto"/><w:ind w:left="360" w:hanging="220"/></w:pPr><w:r><w:rPr>${fuente}<w:color w:val="${RED}"/><w:sz w:val="22"/></w:rPr><w:t xml:space="preserve">• </w:t></w:r>${actaRuns(bullet[1], bodyR)}</w:p>`,
+      );
+      continue;
+    }
+
+    paras.push(
+      `<w:p><w:pPr><w:spacing w:after="120" w:line="276" w:lineRule="auto"/><w:jc w:val="both"/></w:pPr>${actaRuns(line, bodyR)}</w:p>`,
+    );
+  }
+
+  const documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${paras.join("")}<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1417" w:right="1417" w:bottom="1417" w:left="1417" w:header="708" w:footer="708" w:gutter="0"/></w:sectPr></w:body></w:document>`;
+
+  const zip = new JSZip();
+  zip.file("[Content_Types].xml", ACTA_CONTENT_TYPES);
+  zip.file("_rels/.rels", ACTA_RELS);
+  zip.file("word/document.xml", documentXml);
+  return zip.generateAsync({
+    type: "blob",
+    mimeType:
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  });
+}
+
 // ═══════════════════════════════════════════════════════════════════════
 // COMPONENTE PRINCIPAL
 // ═══════════════════════════════════════════════════════════════════════
@@ -258,6 +374,20 @@ export default function Home() {
 
   // ── Campos dinámicos (tipos sin IA) ──
   const [valoresExtra, setValoresExtra] = useState<Record<string, string>>({});
+
+  // ── Acta de reunión / transcripción (solo 'socios') ──
+  const [acta, setActa] = useState("");
+  const [actaFilename, setActaFilename] = useState("");
+  const [transcripcionTexto, setTranscripcionTexto] = useState("");
+  const [transcripcionFilename, setTranscripcionFilename] = useState("");
+  const [generandoActa, setGenerandoActa] = useState(false);
+  const [actaMsg, setActaMsg] = useState("");
+  const [actaCopyLabel, setActaCopyLabel] = useState("Copiar acta");
+
+  // ── Email de acompañamiento ──
+  const [emailTexto, setEmailTexto] = useState("");
+  const [generandoEmail, setGenerandoEmail] = useState(false);
+  const [emailCopyLabel, setEmailCopyLabel] = useState("Copiar email");
 
   // ── Logo (ahora con dimensiones naturales para encajar sin deformación) ──
   const [logoBytes, setLogoBytes] = useState<Uint8Array | null>(null);
@@ -337,6 +467,7 @@ export default function Home() {
     setTextoGenerado("");
     setDatosUltima(null);
     setError("");
+    setEmailTexto("");
   }, [tipo]);
 
   // ─────────────────────────────────────────────────────────────────
@@ -416,6 +547,146 @@ export default function Home() {
   }
 
   // ─────────────────────────────────────────────────────────────────
+  // HANDLERS: Acta / transcripción / email
+  // ─────────────────────────────────────────────────────────────────
+
+  // Llamada compartida a /api/generar (auth + manejo de 401/errores).
+  async function llamarGenerar(payload: Record<string, unknown>): Promise<string> {
+    const password = localStorage.getItem(PASSWORD_STORAGE_KEY) || "";
+    const res = await fetch("/api/generar", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-app-password": password,
+      },
+      body: JSON.stringify(payload),
+    });
+    if (res.status === 401) {
+      localStorage.removeItem(PASSWORD_STORAGE_KEY);
+      setAuthed(false);
+      throw new Error("Sesión expirada. Vuelve a introducir la contraseña.");
+    }
+    if (!res.ok) {
+      const errJson: { error?: string } = await res.json().catch(() => ({}));
+      throw new Error(errJson.error || `HTTP ${res.status}`);
+    }
+    const { texto } = (await res.json()) as { texto: string };
+    return texto.trim();
+  }
+
+  async function handleActaFile(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    setActaMsg("");
+    try {
+      const texto = await extraerTextoArchivo(file);
+      if (!texto) throw new Error("El archivo no contiene texto legible.");
+      setActa(texto);
+      setActaFilename(file.name);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setActaMsg(`No se pudo leer el acta: ${msg}`);
+    } finally {
+      event.target.value = "";
+    }
+  }
+
+  async function handleTranscripcionFile(
+    event: React.ChangeEvent<HTMLInputElement>,
+  ) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    setActaMsg("");
+    try {
+      const texto = await extraerTextoArchivo(file);
+      if (!texto) throw new Error("El archivo no contiene texto legible.");
+      setTranscripcionTexto(texto);
+      setTranscripcionFilename(file.name);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setActaMsg(`No se pudo leer la transcripción: ${msg}`);
+    } finally {
+      event.target.value = "";
+    }
+  }
+
+  async function generarActa() {
+    if (!transcripcionTexto.trim()) {
+      setActaMsg("Sube o pega primero la transcripción de la reunión.");
+      return;
+    }
+    setGenerandoActa(true);
+    setActaMsg("");
+    try {
+      const texto = await llamarGenerar({
+        tarea: "acta",
+        transcripcion: transcripcionTexto,
+      });
+      setActa(texto);
+      setActaMsg("Acta generada. Revísala y ajústala antes de usarla.");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setActaMsg(`❌ ${msg}`);
+    } finally {
+      setGenerandoActa(false);
+    }
+  }
+
+  async function descargarActa() {
+    if (!acta.trim()) return;
+    const nombreLimpio =
+      (nombre || "empresa").replace(/\s+/g, "_").replace(/[^a-zA-Z0-9_-]/g, "") ||
+      "empresa";
+    try {
+      const blob = await construirActaDocx(acta, nombre.trim());
+      saveAs(blob, `Acta_reunion_${nombreLimpio}.docx`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setActaMsg(`No se pudo generar el Word del acta: ${msg}`);
+    }
+  }
+
+  function copiarActa() {
+    navigator.clipboard.writeText(acta).then(() => {
+      setActaCopyLabel("¡Copiada!");
+      setTimeout(() => setActaCopyLabel("Copiar acta"), 2000);
+    });
+  }
+
+  async function generarEmail() {
+    setError("");
+    setGenerandoEmail(true);
+    try {
+      const lineas = LINEAS_LIST.filter((l) => lineasState[l.key]).map(
+        (l) => l.frase,
+      );
+      const texto = await llamarGenerar({
+        tarea: "email",
+        nombre: (datosUltima?.nombre || nombre).trim(),
+        sector: (datosUltima?.sector || sector).trim(),
+        lineas,
+        importe: normalizarImporte(importe),
+        via,
+        acta: acta.trim(),
+        textoPropuesta: textoGenerado,
+      });
+      setEmailTexto(texto);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setError(`❌ Error al generar el email: ${msg}`);
+    } finally {
+      setGenerandoEmail(false);
+    }
+  }
+
+  function copiarEmail() {
+    navigator.clipboard.writeText(emailTexto).then(() => {
+      setEmailCopyLabel("¡Copiado!");
+      setTimeout(() => setEmailCopyLabel("Copiar email"), 2000);
+    });
+  }
+
+  // ─────────────────────────────────────────────────────────────────
   // ACCIÓN PRINCIPAL
   // ─────────────────────────────────────────────────────────────────
   async function accionPrincipal() {
@@ -448,6 +719,7 @@ export default function Home() {
         historial,
         valores: valores.trim(),
         contexto: contexto.trim(),
+        acta: acta.trim(),
         importe: importe.trim(),
         via,
         lineas,
@@ -462,6 +734,7 @@ export default function Home() {
         historial: "",
         valores: "",
         contexto: "",
+        acta: "",
         importe: (valoresExtra.importe || "").trim(),
         via: "",
         lineas: [],
@@ -472,6 +745,7 @@ export default function Home() {
 
     setDatosUltima(datos);
     setError("");
+    setEmailTexto("");
 
     if (!usaIA) {
       await descargarWord(datos);
@@ -584,6 +858,14 @@ export default function Home() {
         reemplazosBasicos[`{{${camelToSnake(key)}}}`] = xmlEscape(val);
       }
 
+      // Une placeholders que Word haya partido en varios runs (p. ej. si al
+      // editar la plantilla se rompe {{IMPORTE}} en dos trozos). Sin esto, el
+      // reemplazo literal de abajo no encontraría el token y saldría en crudo.
+      const unirPlaceholders = (contenido: string) =>
+        contenido.replace(/\{\{[^{}]*?\}\}/g, (m) =>
+          m.includes("<") ? m.replace(/<[^>]*>/g, "") : m,
+        );
+
       // Aplicar a todos los XML del paquete bajo word/ (excepto los _rels y media)
       const archivosXml = Object.keys(zip.files).filter(
         (n) =>
@@ -593,8 +875,9 @@ export default function Home() {
           !n.includes("/media/"),
       );
       for (const nombreXml of archivosXml) {
-        let contenido = await zip.file(nombreXml)!.async("string");
-        let modificado = false;
+        const original = await zip.file(nombreXml)!.async("string");
+        let contenido = unirPlaceholders(original);
+        let modificado = contenido !== original;
         for (const [k, v] of Object.entries(reemplazosBasicos)) {
           if (contenido.includes(k)) {
             contenido = contenido.split(k).join(v);
@@ -651,12 +934,7 @@ export default function Home() {
       zip.file("word/document.xml", xml);
 
      // ─── Logo de empresa: buscar {{LOGO}} en CUALQUIER headerN.xml ───
-
-// Une placeholders que Word haya partido en varios runs.
-const unirPlaceholders = (xml: string) =>
-  xml.replace(/\{\{[^{}]*?\}\}/g, (m) =>
-    m.includes("<") ? m.replace(/<[^>]*>/g, "") : m,
-  );
+// (unirPlaceholders se define arriba y se reutiliza aquí)
 
 const nombresHeaders = Object.keys(zip.files).filter((n) =>
   /^word\/header\d+\.xml$/.test(n),
@@ -970,6 +1248,162 @@ for (const [n, c] of Object.entries(headersContenido)) {
 
             <div className="section-head">
               <div className="dot" />
+              <h3>Acta de reunión / contexto de la relación (opcional)</h3>
+            </div>
+            <div className="card">
+              <p
+                style={{
+                  marginTop: 0,
+                  marginBottom: 12,
+                  opacity: 0.75,
+                  fontSize: 14,
+                }}
+              >
+                Pega el acta o el resumen de la reunión, o súbela como archivo.
+                La IA la usará para que la portada hable de{" "}
+                <strong>esta relación concreta</strong> (menos texto
+                institucional). Todo se procesa en tu navegador.
+              </p>
+              <div className="field" style={{ margin: 0 }}>
+                <label>Acta / contexto</label>
+                <textarea
+                  value={acta}
+                  onChange={(e) => setActa(e.target.value)}
+                  placeholder="Pega aquí el acta o el resumen de la reunión…"
+                  style={{ minHeight: 120 }}
+                />
+              </div>
+              <div className="logo-upload-row" style={{ marginTop: 10 }}>
+                <label htmlFor="f-acta" className="logo-upload-btn">
+                  <svg
+                    width="16"
+                    height="16"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                  >
+                    <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12" />
+                  </svg>
+                  <span>Subir acta (.docx/.txt)</span>
+                </label>
+                <input
+                  type="file"
+                  id="f-acta"
+                  accept=".docx,.txt,text/plain,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                  style={{ display: "none" }}
+                  onChange={handleActaFile}
+                />
+                {actaFilename && (
+                  <span style={{ fontSize: 13, opacity: 0.7 }}>
+                    {actaFilename}
+                  </span>
+                )}
+                {acta.trim() && (
+                  <>
+                    <button
+                      type="button"
+                      className="btn-action"
+                      onClick={copiarActa}
+                    >
+                      {actaCopyLabel}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-action"
+                      onClick={descargarActa}
+                    >
+                      Descargar acta
+                    </button>
+                  </>
+                )}
+              </div>
+
+              <div
+                style={{
+                  marginTop: 16,
+                  paddingTop: 16,
+                  borderTop: "1px solid var(--border)",
+                }}
+              >
+                <p
+                  style={{
+                    marginTop: 0,
+                    marginBottom: 6,
+                    fontSize: 14,
+                    fontWeight: 500,
+                  }}
+                >
+                  ¿Solo tienes la transcripción de Teams?
+                </p>
+                <p
+                  style={{
+                    marginTop: 0,
+                    marginBottom: 10,
+                    opacity: 0.75,
+                    fontSize: 13,
+                  }}
+                >
+                  Súbela y la IA la convierte en un acta que puedes revisar,
+                  editar y guardar. Luego se usa como contexto de la propuesta.
+                </p>
+                <div className="logo-upload-row">
+                  <label htmlFor="f-transcripcion" className="logo-upload-btn">
+                    <svg
+                      width="16"
+                      height="16"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                    >
+                      <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12" />
+                    </svg>
+                    <span>
+                      {transcripcionFilename
+                        ? "Cambiar transcripción"
+                        : "Subir transcripción (.docx/.txt)"}
+                    </span>
+                  </label>
+                  <input
+                    type="file"
+                    id="f-transcripcion"
+                    accept=".docx,.txt,text/plain,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                    style={{ display: "none" }}
+                    onChange={handleTranscripcionFile}
+                  />
+                  {transcripcionFilename && (
+                    <span style={{ fontSize: 13, opacity: 0.7 }}>
+                      {transcripcionFilename}
+                    </span>
+                  )}
+                  <button
+                    type="button"
+                    className="btn-action primary"
+                    onClick={generarActa}
+                    disabled={generandoActa || !transcripcionTexto.trim()}
+                  >
+                    {generandoActa ? "Generando acta…" : "Generar acta"}
+                  </button>
+                </div>
+              </div>
+
+              {actaMsg && (
+                <p
+                  style={{
+                    marginTop: 12,
+                    marginBottom: 0,
+                    fontSize: 13,
+                    opacity: 0.85,
+                  }}
+                >
+                  {actaMsg}
+                </p>
+              )}
+            </div>
+
+            <div className="section-head">
+              <div className="dot" />
               <h3>Líneas de colaboración a destacar</h3>
             </div>
             <div className="card">
@@ -1158,6 +1592,15 @@ for (const [n, c] of Object.entries(headersContenido)) {
               <button className="btn-action" onClick={accionPrincipal}>
                 Regenerar
               </button>
+              <button
+                className="btn-action"
+                onClick={generarEmail}
+                disabled={generandoEmail}
+              >
+                {generandoEmail
+                  ? "Generando email…"
+                  : "Generar email de acompañamiento"}
+              </button>
             </div>
 
             <div className="info-callout">
@@ -1167,6 +1610,18 @@ for (const [n, c] of Object.entries(headersContenido)) {
                 ? "El logo de la empresa ya viene integrado."
                 : "Recuerda añadir el logo de la empresa a mano antes de enviar."}
             </div>
+
+            {emailTexto && (
+              <div className="proposal-block" style={{ marginTop: 16 }}>
+                <h4>Email de acompañamiento</h4>
+                <div className="proposal-content">{emailTexto}</div>
+                <div className="action-row" style={{ marginTop: 12 }}>
+                  <button className="btn-action" onClick={copiarEmail}>
+                    {emailCopyLabel}
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         )}
       </main>
