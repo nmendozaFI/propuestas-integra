@@ -108,6 +108,7 @@ export default function FormularioConvenio({
   valoresIniciales,
   fijados,
   fijadosReadOnly = false,
+  salida = "word",
 }: {
   codigo: string;
   cargarBytes: () => Promise<Uint8Array>;
@@ -116,8 +117,15 @@ export default function FormularioConvenio({
   fijados?: Record<string, string>;
   /** Si true, los campos fijados se muestran de solo lectura (ruta pública). */
   fijadosReadOnly?: boolean;
+  /** Formato de descarga. 'pdf' convierte el Word a PDF calcado (ruta pública de
+   *  las plantillas marcadas con `descargaPdfPublica`). Por defecto 'word'. */
+  salida?: "word" | "pdf";
 }) {
   const tipo = getTipoConvenio(codigo);
+
+  // Cuando la plantilla exige todos los campos (p. ej. ENT-01), no se puede
+  // descargar hasta que estén completos. Se deriva del propio tipo.
+  const exigir = !!tipo?.camposObligatorios;
 
   const [valores, setValores] = useState<Record<string, string>>({
     ...(valoresIniciales || {}),
@@ -130,6 +138,8 @@ export default function FormularioConvenio({
   const [plantillaBytes, setPlantillaBytes] = useState<Uint8Array | null>(null);
   const [error, setError] = useState("");
   const [downloading, setDownloading] = useState(false);
+  // true tras un intento de descarga: activa el resaltado de campos vacíos.
+  const [intentado, setIntentado] = useState(false);
   const inputLogoRef = useRef<HTMLInputElement | null>(null);
 
   // Precargar la plantilla
@@ -196,8 +206,26 @@ export default function FormularioConvenio({
     if (inputLogoRef.current) inputLogoRef.current.value = "";
   }
 
+  // Campos que faltan por rellenar (solo si la plantilla los exige).
+  function camposFaltantes(): CampoConfig[] {
+    if (!exigir || !tipo?.campos) return [];
+    return tipo.campos.filter((c) => !(valores[c.key] || "").trim());
+  }
+
   async function generar() {
     if (!tipo?.plantilla || !tipo.campos) return;
+
+    // Validación de obligatorios: bloquea la descarga si falta algo.
+    if (exigir) {
+      const faltan = camposFaltantes();
+      if (faltan.length > 0) {
+        setIntentado(true);
+        setError(
+          `Faltan campos por rellenar: ${faltan.map((c) => c.label).join(", ")}.`,
+        );
+        return;
+      }
+    }
 
     let bytes = plantillaBytes;
     if (!bytes) {
@@ -220,10 +248,37 @@ export default function FormularioConvenio({
         datos.cuidadFirma = (datos.lugarFirma || "").trim();
       }
       const blob = await rellenarConvenio({ plantillaBytes: bytes, datos, logo });
-      saveAs(blob, nombreArchivoConvenio(tipo.codigo, valores.nombreEmpresa || ""));
+      const base = nombreArchivoConvenio(
+        tipo.codigo,
+        valores.nombreEmpresa || "",
+      ).replace(/\.docx$/i, "");
+
+      if (salida === "pdf") {
+        // El .docx ya relleno se convierte a PDF calcado en el servidor
+        // (/api/convenio-pdf → CloudConvert). Se descarga el PDF, no el Word.
+        const fd = new FormData();
+        fd.append("file", blob, `${base}.docx`);
+        fd.append("nombre", base);
+        const resp = await fetch("/api/convenio-pdf", {
+          method: "POST",
+          body: fd,
+        });
+        if (!resp.ok) {
+          const detalle = await resp.text().catch(() => "");
+          throw new Error(
+            `No se pudo convertir a PDF (${resp.status}). ${detalle}`.trim(),
+          );
+        }
+        const pdfBlob = await resp.blob();
+        saveAs(pdfBlob, `${base}.pdf`);
+      } else {
+        saveAs(blob, `${base}.docx`);
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      setError(`❌ Error al generar el Word: ${msg}`);
+      setError(
+        `❌ Error al generar el ${salida === "pdf" ? "PDF" : "Word"}: ${msg}`,
+      );
     } finally {
       setDownloading(false);
     }
@@ -242,15 +297,28 @@ export default function FormularioConvenio({
       </div>
       <div className="card">
         <p style={{ marginTop: 0, marginBottom: 14, opacity: 0.75, fontSize: 14 }}>
-          Todos los campos son opcionales. Los que dejes en blanco saldrán en el
-          Word como una línea (__________) para rellenar a mano. El importe en
-          letras se añade automáticamente a partir de la cifra.
+          {exigir ? (
+            <>
+              Todos los campos son <strong>obligatorios</strong>: complétalos para
+              poder descargar el documento
+              {salida === "pdf" ? " en PDF" : ""}. El importe en letras se añade
+              automáticamente a partir de la cifra.
+            </>
+          ) : (
+            <>
+              Todos los campos son opcionales. Los que dejes en blanco saldrán en
+              el Word como una línea (__________) para rellenar a mano. El importe
+              en letras se añade automáticamente a partir de la cifra.
+            </>
+          )}
         </p>
         <CamposDinamicos
           campos={tipo.campos}
           valores={valores}
           onChange={setCampo}
           fijados={fijadosReadOnly ? fijadosSet : {}}
+          exigir={exigir}
+          intentado={intentado}
         />
       </div>
 
@@ -315,9 +383,13 @@ export default function FormularioConvenio({
           <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
         </svg>
         {downloading
-          ? "Generando Word…"
+          ? salida === "pdf"
+            ? "Generando PDF…"
+            : "Generando Word…"
           : plantillaLista
-            ? "Generar y descargar Word"
+            ? salida === "pdf"
+              ? "Generar y descargar PDF"
+              : "Generar y descargar Word"
             : "Cargando plantilla…"}
       </button>
     </>
@@ -332,11 +404,15 @@ function CamposDinamicos({
   valores,
   onChange,
   fijados,
+  exigir,
+  intentado,
 }: {
   campos: CampoConfig[];
   valores: Record<string, string>;
   onChange: (key: string, val: string) => void;
   fijados: Record<string, string>;
+  exigir: boolean;
+  intentado: boolean;
 }) {
   const filas: CampoConfig[][] = [];
   let pendiente: CampoConfig | null = null;
@@ -365,15 +441,21 @@ function CamposDinamicos({
           className={fila.length === 2 ? "grid2" : ""}
           style={idx > 0 ? { marginTop: 14 } : undefined}
         >
-          {fila.map((c) => (
-            <CampoRender
-              key={c.key}
-              campo={c}
-              valor={valores[c.key] || ""}
-              onChange={(v) => onChange(c.key, v)}
-              fijado={Object.prototype.hasOwnProperty.call(fijados, c.key)}
-            />
-          ))}
+          {fila.map((c) => {
+            const fijado = Object.prototype.hasOwnProperty.call(fijados, c.key);
+            const vacio = !(valores[c.key] || "").trim();
+            return (
+              <CampoRender
+                key={c.key}
+                campo={c}
+                valor={valores[c.key] || ""}
+                onChange={(v) => onChange(c.key, v)}
+                fijado={fijado}
+                exigir={exigir}
+                faltante={exigir && intentado && vacio && !fijado}
+              />
+            );
+          })}
         </div>
       ))}
     </>
@@ -385,29 +467,49 @@ function CampoRender({
   valor,
   onChange,
   fijado,
+  exigir,
+  faltante,
 }: {
   campo: CampoConfig;
   valor: string;
   onChange: (v: string) => void;
   fijado: boolean;
+  exigir: boolean;
+  faltante: boolean;
 }) {
+  // Borde ámbar cuando el campo es obligatorio y quedó vacío tras intentar
+  // descargar (ámbar, no rojo de marca, para no confundir con la identidad).
+  const estiloError = faltante
+    ? { borderColor: "var(--danger-border)", background: "var(--danger-bg)" }
+    : undefined;
+  const clase = [fijado ? "campo-fijado" : "", faltante ? "campo-faltante" : ""]
+    .filter(Boolean)
+    .join(" ");
+
   return (
     <div className="field">
-      <label>{campo.label}</label>
+      <label>
+        {campo.label}
+        {exigir && !fijado && (
+          <span style={{ color: "var(--danger)", marginLeft: 3 }}>*</span>
+        )}
+      </label>
       {campo.tipo === "textarea" ? (
         <textarea
           value={valor}
           onChange={(e) => onChange(e.target.value)}
           placeholder={campo.placeholder}
           readOnly={fijado}
-          className={fijado ? "campo-fijado" : undefined}
+          className={clase || undefined}
+          style={estiloError}
         />
       ) : campo.tipo === "select" ? (
         <select
           value={valor}
           onChange={(e) => onChange(e.target.value)}
           disabled={fijado}
-          className={fijado ? "campo-fijado" : undefined}
+          className={clase || undefined}
+          style={estiloError}
         >
           <option value="">— Selecciona —</option>
           {(campo.opciones || []).map((op) => (
@@ -421,11 +523,16 @@ function CampoRender({
           onChange={(e) => onChange(e.target.value)}
           placeholder={campo.placeholder}
           readOnly={fijado}
-          className={fijado ? "campo-fijado" : undefined}
+          className={clase || undefined}
+          style={estiloError}
         />
       )}
       {fijado ? (
         <p className="campo-fijado-nota">Fijado por Fundación Íntegra</p>
+      ) : faltante ? (
+        <p style={{ marginTop: 6, fontSize: 12, color: "var(--danger)" }}>
+          Este campo es obligatorio.
+        </p>
       ) : (
         campo.ayuda && (
           <p style={{ marginTop: 6, fontSize: 12, opacity: 0.7 }}>{campo.ayuda}</p>

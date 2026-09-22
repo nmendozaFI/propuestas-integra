@@ -55,6 +55,14 @@ export type TipoConvenio = {
   plantilla?: string; // ruta en /public (solo si está normalizada)
   campos?: CampoConfig[]; // declaración del formulario
   proximamente?: boolean; // true mientras no se haya normalizado el .docx
+  // Exige que TODOS los campos estén rellenos antes de permitir la descarga
+  // (para evitar convenios devueltos a medias). Por defecto, todos opcionales.
+  camposObligatorios?: boolean;
+  // En la ruta PÚBLICA (la empresa), descarga un PDF calcado del Word en vez del
+  // .docx (para que el cliente no lo edite). La plantilla sigue siendo Word; el
+  // .docx se rellena igual y se convierte a PDF en el servidor. La ruta interna
+  // del equipo sigue descargando Word.
+  descargaPdfPublica?: boolean;
 };
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -279,8 +287,33 @@ const CAMPO_NOMBRE_PROYECTO: CampoConfig = {
   ancho: 'completo',
 };
 
-// LGD-01 (preacuerdo) y LGD-02 (acuerdo) comparten ficha. Los datos de la
-// escritura de poder NO son campos: quedan como hueco en blanco en el Word.
+// ─── Datos de la escritura de poder (LGD-01 / LGD-02, hoja 1) ───
+// "…según consta en la escritura de poder otorgada por ___ en la fecha ___,
+// con el número ___ de protocolo." Opcionales: vacío → línea en blanco.
+const CAMPO_PODER_OTORGADO_POR: CampoConfig = {
+  key: 'poderOtorgadoPor', // → {{PODER_OTORGADO_POR}}
+  label: 'Escritura de poder otorgada por',
+  tipo: 'text',
+  placeholder: 'Ej: Notario D. Félix Pastor Ridruejo, de Madrid',
+  ayuda: 'Datos de la escritura de poder (opcional). Si lo dejas vacío, queda una línea para rellenar a mano.',
+  ancho: 'completo',
+};
+
+const CAMPO_FECHA_PODER: CampoConfig = {
+  key: 'fechaPoder', // → {{FECHA_PODER}}
+  label: 'Fecha del poder',
+  tipo: 'text',
+  placeholder: 'Ej: 1 de junio de 2001',
+};
+
+const CAMPO_NUMERO_PROTOCOLO: CampoConfig = {
+  key: 'numeroProtocolo', // → {{NUMERO_PROTOCOLO}}
+  label: 'Nº de protocolo',
+  tipo: 'text',
+  placeholder: 'Ej: 1776',
+};
+
+// LGD-01 (preacuerdo) y LGD-02 (acuerdo) comparten ficha.
 const CAMPOS_DONACION_LGD: CampoConfig[] = [
   CAMPO_NOMBRE_EMPRESA,
   CAMPO_NIF_EMPRESA,
@@ -288,6 +321,9 @@ const CAMPOS_DONACION_LGD: CampoConfig[] = [
   CAMPO_REPRESENTANTE, // reutilizado
   CAMPO_DNI_REP, // reutilizado
   CAMPO_CARGO, // reutilizado
+  CAMPO_PODER_OTORGADO_POR, // escritura de poder (hoja 1)
+  CAMPO_FECHA_PODER,
+  CAMPO_NUMERO_PROTOCOLO,
   CAMPO_ACTIVIDAD,
   CAMPO_PLAZO_ANIOS,
   CAMPO_EMAIL_DPO, // reutilizado
@@ -296,11 +332,47 @@ const CAMPOS_DONACION_LGD: CampoConfig[] = [
   CAMPO_FECHA_FIRMA, // reutilizado
 ];
 
-// PRO-01. Los datos registrales (registrada como, fecha de constitución, nº de
-// inscripción, registro) NO son campos: quedan como hueco en blanco en el Word.
+// ─── Datos registrales de la empresa (PRO-01, hoja 2) ───
+// "…registrada como ___ el día ___ e inscrita con el número ___ en el
+// Registro ___…" Opcionales: vacío → línea en blanco.
+const CAMPO_REGISTRADA_COMO: CampoConfig = {
+  key: 'registradaComo', // → {{REGISTRADA_COMO}}
+  label: 'Registrada como',
+  tipo: 'text',
+  placeholder: 'Ej: Sociedad Limitada',
+  ayuda: 'Datos registrales (opcional). Si lo dejas vacío, queda una línea para rellenar a mano.',
+};
+
+const CAMPO_FECHA_REGISTRO: CampoConfig = {
+  key: 'fechaRegistro', // → {{FECHA_REGISTRO}}
+  label: 'Día de registro',
+  tipo: 'text',
+  placeholder: 'Ej: 3 de marzo de 2015',
+};
+
+const CAMPO_NUMERO_INSCRIPCION: CampoConfig = {
+  key: 'numeroInscripcion', // → {{NUMERO_INSCRIPCION}}
+  label: 'Nº de inscripción',
+  tipo: 'text',
+  placeholder: 'Ej: 12345',
+};
+
+const CAMPO_REGISTRO_MAESTRO: CampoConfig = {
+  key: 'registroMaestro', // → {{REGISTRO_MAESTRO}}
+  label: 'Registro',
+  tipo: 'text',
+  placeholder: 'Ej: Registro Mercantil de Madrid',
+  ancho: 'completo',
+};
+
+// PRO-01.
 const CAMPOS_DONACION_PROYECTO: CampoConfig[] = [
   CAMPO_NOMBRE_EMPRESA,
   CAMPO_NIF_EMPRESA,
+  CAMPO_REGISTRADA_COMO, // datos registrales (hoja 2)
+  CAMPO_FECHA_REGISTRO,
+  CAMPO_NUMERO_INSCRIPCION,
+  CAMPO_REGISTRO_MAESTRO,
   CAMPO_DOMICILIO, // reutilizado
   CAMPO_REPRESENTANTE, // reutilizado
   CAMPO_DNI_REP, // reutilizado
@@ -405,6 +477,8 @@ export const TIPOS_CONVENIO: TipoConvenio[] = [
     label: 'Convenio colaboración con entidad',
     plantilla: '/convenios/ENT-01.docx',
     campos: CAMPOS_COLABORACION,
+    camposObligatorios: true, // se envía a menudo incompleto → exigir todo
+    descargaPdfPublica: true, // la empresa descarga PDF (no editable)
   },
   // {
   //   codigo: 'ENT-02',

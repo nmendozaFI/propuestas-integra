@@ -5,6 +5,7 @@
 
 import FormularioConvenio from "@/components/FormularioConvenio";
 import { cargarPlantillaConvenioPublica } from "@/lib/convenio-publico-cliente";
+import { getTipoConvenio } from "@/lib/tipos-convenio";
 
 export default function ConvenioPublicoForm({
   codigo,
@@ -15,6 +16,9 @@ export default function ConvenioPublicoForm({
   valoresIniciales?: Record<string, string>;
   fijados?: Record<string, string>;
 }) {
+  // En la ruta pública, las plantillas marcadas descargan PDF (no editable).
+  const salida = getTipoConvenio(codigo)?.descargaPdfPublica ? "pdf" : "word";
+
   return (
     <FormularioConvenio
       codigo={codigo}
@@ -22,6 +26,7 @@ export default function ConvenioPublicoForm({
       valoresIniciales={valoresIniciales}
       fijados={fijados}
       fijadosReadOnly
+      salida={salida}
     />
   );
 }

@@ -69,6 +69,9 @@ export default async function ConvenioPublicoPage({
   const tipo = getTipoConvenio(codigo);
   if (!tipo?.plantilla || !tipo.campos) notFound();
 
+  // Plantillas que se descargan en PDF (calcado del Word) en vez de .docx.
+  const esPdf = !!tipo.descargaPdfPublica;
+
   // Campos fijados por la Fundación: cualquier query param cuyo nombre coincida
   // con la `key` de un campo de esta plantilla.
   const sp = await searchParams;
@@ -112,13 +115,14 @@ export default async function ConvenioPublicoPage({
           <div className="paso">
             <div className="paso-num">2</div>
             <div className="paso-text">
-              <strong>Descarga</strong> el Word ya cumplimentado.
+              <strong>Descarga</strong> el {esPdf ? "PDF" : "Word"} ya
+              cumplimentado.
             </div>
           </div>
           <div className="paso">
             <div className="paso-num">3</div>
             <div className="paso-text">
-              <strong>Revísalo y envíanoslo firmado</strong> a la Fundación.
+              <strong>Revísalo y envíalo nuevamente</strong> a la Fundación.
             </div>
           </div>
         </div>
@@ -128,8 +132,18 @@ export default async function ConvenioPublicoPage({
             <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
           </svg>
           <span>
-            Tus datos no salen de tu ordenador: el documento se genera aquí mismo,
-            en tu navegador. No se envía nada a ningún servidor.
+            {esPdf ? (
+              <>
+                El documento se rellena aquí mismo, en tu navegador. Para
+                entregártelo en PDF, se convierte en un servicio de conversión
+                seguro (Unión Europea) y no se conserva ninguna copia.
+              </>
+            ) : (
+              <>
+                Tus datos no salen de tu ordenador: el documento se genera aquí
+                mismo, en tu navegador. No se envía nada a ningún servidor.
+              </>
+            )}
           </span>
         </div>
 
