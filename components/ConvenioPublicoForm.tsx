@@ -16,8 +16,11 @@ export default function ConvenioPublicoForm({
   valoresIniciales?: Record<string, string>;
   fijados?: Record<string, string>;
 }) {
+  const tipo = getTipoConvenio(codigo);
   // En la ruta pública, las plantillas marcadas descargan PDF (no editable).
-  const salida = getTipoConvenio(codigo)?.descargaPdfPublica ? "pdf" : "word";
+  const salida = tipo?.descargaPdfPublica ? "pdf" : "word";
+  // Y las marcadas con `flujoEnvio` no descargan: se revisa y se envía.
+  const modo = tipo?.flujoEnvio ? "envio" : "descarga";
 
   return (
     <FormularioConvenio
@@ -27,6 +30,7 @@ export default function ConvenioPublicoForm({
       fijados={fijados}
       fijadosReadOnly
       salida={salida}
+      modo={modo}
     />
   );
 }

@@ -35,8 +35,9 @@ export async function generateMetadata({
   const titulo = tipo
     ? `${tipo.label} · Fundación Íntegra`
     : 'Convenio · Fundación Íntegra';
-  const descripcion =
-    'Rellena, descarga y devuelve firmado tu convenio con Fundación Íntegra.';
+  const descripcion = tipo?.flujoEnvio
+    ? 'Rellena, revisa y envía tu convenio con Fundación Íntegra en un par de minutos.'
+    : 'Rellena, descarga y devuelve firmado tu convenio con Fundación Íntegra.';
   return {
     title: titulo,
     description: descripcion,
@@ -71,6 +72,9 @@ export default async function ConvenioPublicoPage({
 
   // Plantillas que se descargan en PDF (calcado del Word) en vez de .docx.
   const esPdf = !!tipo.descargaPdfPublica;
+  // Plantillas que, en vez de descargar, se revisan en pantalla y se envían a
+  // la Fundación por correo (hoy ENT-01).
+  const esEnvio = !!tipo.flujoEnvio;
 
   // Campos fijados por la Fundación: cualquier query param cuyo nombre coincida
   // con la `key` de un campo de esta plantilla.
@@ -108,21 +112,39 @@ export default async function ConvenioPublicoPage({
           <div className="paso">
             <div className="paso-num">1</div>
             <div className="paso-text">
-              <strong>Rellena</strong> los datos de tu empresa y, si quieres, sube
-              tu logo.
+              <strong>Rellena</strong> los datos de tu empresa
+              {esEnvio ? " y sube tu logo." : " y, si quieres, sube tu logo."}
             </div>
           </div>
           <div className="paso">
             <div className="paso-num">2</div>
             <div className="paso-text">
-              <strong>Descarga</strong> el {esPdf ? "PDF" : "Word"} ya
-              cumplimentado.
+              {esEnvio ? (
+                <>
+                  <strong>Revisa</strong> el documento ya cumplimentado en
+                  pantalla.
+                </>
+              ) : (
+                <>
+                  <strong>Descarga</strong> el {esPdf ? "PDF" : "Word"} ya
+                  cumplimentado.
+                </>
+              )}
             </div>
           </div>
           <div className="paso">
             <div className="paso-num">3</div>
             <div className="paso-text">
-              <strong>Revísalo y envíalo nuevamente</strong> a la Fundación.
+              {esEnvio ? (
+                <>
+                  <strong>Acepta y envía</strong>: nos llega al instante y te lo
+                  devolvemos firmado.
+                </>
+              ) : (
+                <>
+                  <strong>Revísalo y envíalo nuevamente</strong> a la Fundación.
+                </>
+              )}
             </div>
           </div>
         </div>
@@ -132,7 +154,14 @@ export default async function ConvenioPublicoPage({
             <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
           </svg>
           <span>
-            {esPdf ? (
+            {esEnvio ? (
+              <>
+                El documento se rellena aquí mismo, en tu navegador. Al pulsar
+                enviar, el PDF se remite únicamente a Fundación Íntegra: se
+                convierte en un servicio seguro (Unión Europea) que no conserva
+                ninguna copia, y tus datos no se usan para nada más.
+              </>
+            ) : esPdf ? (
               <>
                 El documento se rellena aquí mismo, en tu navegador. Para
                 entregártelo en PDF, se convierte en un servicio de conversión

@@ -63,6 +63,13 @@ export type TipoConvenio = {
   // .docx se rellena igual y se convierte a PDF en el servidor. La ruta interna
   // del equipo sigue descargando Word.
   descargaPdfPublica?: boolean;
+  // El logo de la empresa deja de ser opcional: sin logo no se genera nada.
+  // Aplica a las dos rutas (interna y pública).
+  logoObligatorio?: boolean;
+  // Cambia el flujo de la ruta PÚBLICA: en vez de descargar el documento, la
+  // empresa lo revisa en pantalla (PDF) y lo ENVÍA a la Fundación por correo.
+  // Requiere `descargaPdfPublica` (lo que se revisa y se envía es el PDF).
+  flujoEnvio?: boolean;
 };
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -478,7 +485,9 @@ export const TIPOS_CONVENIO: TipoConvenio[] = [
     plantilla: '/convenios/ENT-01.docx',
     campos: CAMPOS_COLABORACION,
     camposObligatorios: true, // se envía a menudo incompleto → exigir todo
-    descargaPdfPublica: true, // la empresa descarga PDF (no editable)
+    descargaPdfPublica: true, // el documento se materializa en PDF (no editable)
+    logoObligatorio: true, // el convenio no sale sin el logo de la entidad
+    flujoEnvio: true, // pública: rellenar → revisar → aceptar y enviar
   },
   // {
   //   codigo: 'ENT-02',
