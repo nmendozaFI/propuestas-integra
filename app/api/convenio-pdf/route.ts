@@ -35,7 +35,11 @@ function nombreSeguro(base: string): string {
 }
 
 export async function POST(req: NextRequest) {
-  const apiKey = process.env.CLOUDCONVERT_API_KEY;
+  // .trim(): la clave de CloudConvert es un JWT de ~1.000 caracteres y al
+  // pegarla en el panel de Vercel es fácil que se cuele un salto de línea o un
+  // espacio al final. La cabecera Authorization sale entonces malformada y la
+  // API responde "Unauthorized", que despista mucho.
+  const apiKey = process.env.CLOUDCONVERT_API_KEY?.trim();
   if (!apiKey) {
     return NextResponse.json(
       { error: 'Falta CLOUDCONVERT_API_KEY en el servidor.' },
@@ -118,6 +122,22 @@ export async function POST(req: NextRequest) {
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[convenio-pdf] ${msg}`);
+
+    // "Unauthorized" a secas es siempre lo mismo: la CLOUDCONVERT_API_KEY de
+    // ESTE entorno no vale (mal pegada, de otra cuenta o revocada). Lo decimos
+    // con nombre y apellidos para no perder tiempo buscando en otro sitio.
+    if (/unauthorized|unauthenticated|401/i.test(msg)) {
+      return NextResponse.json(
+        {
+          error:
+            'CloudConvert ha rechazado la clave de este entorno (CLOUDCONVERT_API_KEY). ' +
+            'Revisa que esté bien copiada y activa para el entorno desplegado.',
+        },
+        { status: 502 },
+      );
+    }
+
     return NextResponse.json(
       { error: `Error al convertir a PDF: ${msg}` },
       { status: 502 },
