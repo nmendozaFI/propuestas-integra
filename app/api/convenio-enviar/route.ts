@@ -21,6 +21,8 @@ import {
   construirAsunto,
   construirCuerpoHtml,
 } from '@/lib/convenio-mail-cuerpo';
+import { buscarEnlace, consumirEnlace } from '@/lib/enlaces-repo';
+import { enlaceUtilizable, estadoVisible } from '@/lib/enlaces-tipos';
 
 export const runtime = 'nodejs';
 export const maxDuration = 30;
@@ -84,6 +86,7 @@ export async function POST(req: NextRequest) {
   // ─── Leer el formulario ───
   let file: File | null = null;
   let codigo = '';
+  let token = '';
   let datos: Record<string, string> = {};
   try {
     const form = await req.formData();
@@ -91,6 +94,8 @@ export async function POST(req: NextRequest) {
     if (f instanceof File) file = f;
     const c = form.get('codigo');
     if (typeof c === 'string') codigo = c.toUpperCase();
+    const tk = form.get('token');
+    if (typeof tk === 'string') token = tk;
     const d = form.get('datos');
     if (typeof d === 'string' && d) {
       const parsed: unknown = JSON.parse(d);
@@ -108,6 +113,58 @@ export async function POST(req: NextRequest) {
     return NextResponse.json(
       { error: 'Este convenio no admite el envío en línea.' },
       { status: 400 },
+    );
+  }
+
+  // ─── El enlace de un solo uso ───
+  // Las plantillas con `flujoEnvio` SOLO se envían con un token válido. Sin esto, la
+  // URL a pelo (/convenio/ENT-01) seguiría aceptando envíos ilimitados y el token no
+  // serviría de nada. Se comprueba aquí, antes de convertir y enviar, para no gastar
+  // crédito de CloudConvert ni molestar al buzón con un enlace muerto. El token NO se
+  // consume todavía: eso va después de que Graph confirme.
+  if (!token) {
+    return NextResponse.json(
+      {
+        error:
+          'Este convenio necesita un enlace personalizado. Pide uno a la persona de ' +
+          'Fundación Íntegra con quien lo estás tramitando.',
+      },
+      { status: 403 },
+    );
+  }
+
+  let enlace;
+  try {
+    enlace = await buscarEnlace(token);
+  } catch (err) {
+    console.error(
+      `[convenio-enviar] base de datos: ${err instanceof Error ? err.message : err}`,
+    );
+    return NextResponse.json(
+      { error: 'No hemos podido validar tu enlace. Vuelve a intentarlo en unos minutos.' },
+      { status: 503 },
+    );
+  }
+
+  if (!enlace || enlace.codigo !== tipo.codigo) {
+    return NextResponse.json({ error: 'Este enlace no es válido.' }, { status: 403 });
+  }
+  if (!enlaceUtilizable(enlace)) {
+    // Cada estado dice una cosa distinta a quien está al otro lado: no es lo mismo
+    // "ya lo mandaste" que "se te pasó el plazo" o "te lo hemos anulado".
+    const MOTIVO: Record<string, string> = {
+      usado:
+        'Este convenio ya se envió con este enlace. Si necesitas mandarlo otra vez, ' +
+        'pide uno nuevo a Fundación Íntegra.',
+      caducado: 'Este enlace ha caducado. Pide uno nuevo a Fundación Íntegra.',
+      anulado:
+        'Este enlace ya no está activo. Ponte en contacto con Fundación Íntegra para ' +
+        'que te facilite otro.',
+    };
+    const estado = estadoVisible(enlace);
+    return NextResponse.json(
+      { error: MOTIVO[estado] ?? 'Este enlace no es válido.' },
+      { status: 409 },
     );
   }
 
@@ -169,6 +226,28 @@ export async function POST(req: NextRequest) {
           `en unos minutos; si sigue fallando, escríbenos a ${cfg.to[0]}.`,
       },
       { status: 502 },
+    );
+  }
+
+  // ─── Consumir el enlace ───
+  // AQUÍ y no antes: si el correo hubiera fallado, el enlace tiene que seguir sirviendo.
+  // `consumirEnlace` es un UPDATE condicional (… and estado = 'pendiente'), atómico: si
+  // llegan dos envíos a la vez, uno consume y el otro recibe false.
+  //
+  // Si devuelve false el correo YA SE HA MANDADO, así que a la empresa se le confirma
+  // igual: sería absurdo decirle que ha fallado algo que ha llegado. Queda en los logs.
+  try {
+    const consumido = await consumirEnlace(token, (datos.nombreEmpresa || '').trim() || null);
+    if (!consumido) {
+      console.warn(
+        `[convenio-enviar] ${tipo.codigo}: correo enviado pero el token ya no estaba ` +
+          'pendiente (¿doble envío simultáneo?).',
+      );
+    }
+  } catch (err) {
+    console.error(
+      `[convenio-enviar] ${tipo.codigo}: correo enviado pero no se pudo marcar el enlace ` +
+        `como usado: ${err instanceof Error ? err.message : err}`,
     );
   }
 

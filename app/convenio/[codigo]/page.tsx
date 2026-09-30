@@ -1,22 +1,28 @@
 // ═══════════════════════════════════════════════════════════════════════
-// /convenio/[codigo]  → RUTA PÚBLICA (la empresa rellena el convenio)
+// /convenio/[codigo]  → RUTA PÚBLICA ABIERTA (la empresa rellena y descarga)
 // ═══════════════════════════════════════════════════════════════════════
 //
 // Sin contraseña y sin la barra de navegación de la app (el Navbar se oculta
 // solo en /convenio/…). Server Component: valida el código, lee los campos que
-// la Fundación fija por query param y los pasa al formulario compartido.
+// la Fundación fija por query param y los pasa a la pantalla compartida.
 //
-// El .docx se genera ÍNTEGRAMENTE en el navegador (JSZip): los datos del
-// formulario no se envían a ningún servidor. Por eso mostramos el aviso de
-// privacidad y la plantilla se descarga vía el endpoint público de un solo
-// convenio (versión viva del almacén, sin exponer el manifest).
+// 🔴 LAS PLANTILLAS CON `flujoEnvio` (hoy ENT-01) NO SE SIRVEN AQUÍ.
+// Esas exigen un enlace de un solo uso (/convenio/t/[token]). Si esta ruta las
+// siguiera aceptando, el token no serviría de nada: bastaría con quitarlo de la
+// dirección para volver al enlace reutilizable e ilimitado de antes. El envío
+// está cortado además en el servidor (app/api/convenio-enviar), pero se corta
+// también aquí para no dejar a la empresa rellenar un formulario en balde.
+//
+// El resto de plantillas siguen abiertas: solo generan un .docx en el navegador,
+// sin efecto en el servidor, así que no hay nada que limitar.
 // ═══════════════════════════════════════════════════════════════════════
 
 import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
 import { getTipoConvenio } from '@/lib/tipos-convenio';
 import { MARCA } from '@/lib/marca';
-import ConvenioPublicoForm from '@/components/ConvenioPublicoForm';
+import PantallaConvenio from '@/components/convenios/PantallaConvenio';
+import EnlaceNoValido from '@/components/convenios/EnlaceNoValido';
 
 type Params = { codigo: string };
 type Search = Record<string, string | string[] | undefined>;
@@ -70,11 +76,8 @@ export default async function ConvenioPublicoPage({
   const tipo = getTipoConvenio(codigo);
   if (!tipo?.plantilla || !tipo.campos) notFound();
 
-  // Plantillas que se descargan en PDF (calcado del Word) en vez de .docx.
-  const esPdf = !!tipo.descargaPdfPublica;
-  // Plantillas que, en vez de descargar, se revisan en pantalla y se envían a
-  // la Fundación por correo (hoy ENT-01).
-  const esEnvio = !!tipo.flujoEnvio;
+  // Ver el bloque de cabecera: estas plantillas solo se sirven con token.
+  if (tipo.flujoEnvio) return <EnlaceNoValido motivo="requiere-enlace" />;
 
   // Campos fijados por la Fundación: cualquier query param cuyo nombre coincida
   // con la `key` de un campo de esta plantilla.
@@ -87,110 +90,5 @@ export default async function ConvenioPublicoPage({
     if (valor != null && valor.trim() !== '') fijados[k] = valor;
   }
 
-  // Defaults públicos: lugar de firma "Madrid", fecha de firma vacía
-  // (la empresa firmará otro día).
-  const valoresIniciales: Record<string, string> = {
-    lugarFirma: 'Madrid',
-    fechaFirma: '',
-  };
-
-  return (
-    <>
-      {/* Banda roja de marca a todo el ancho con el logo negativo centrado */}
-      <div className="publico-banda">
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img className="publico-logo" src={MARCA.logoNegativo} alt="Fundación Íntegra" />
-      </div>
-
-      <div className="publico-wrap">
-        <header className="publico-header">
-          <h1 className="publico-titulo">{tipo.label}</h1>
-          <p className="publico-codigo">{tipo.codigo}</p>
-        </header>
-
-        <div className="publico-pasos">
-          <div className="paso">
-            <div className="paso-num">1</div>
-            <div className="paso-text">
-              <strong>Rellena</strong> los datos de tu empresa
-              {esEnvio ? " y sube tu logo." : " y, si quieres, sube tu logo."}
-            </div>
-          </div>
-          <div className="paso">
-            <div className="paso-num">2</div>
-            <div className="paso-text">
-              {esEnvio ? (
-                <>
-                  <strong>Revisa</strong> el documento ya cumplimentado en
-                  pantalla.
-                </>
-              ) : (
-                <>
-                  <strong>Descarga</strong> el {esPdf ? "PDF" : "Word"} ya
-                  cumplimentado.
-                </>
-              )}
-            </div>
-          </div>
-          <div className="paso">
-            <div className="paso-num">3</div>
-            <div className="paso-text">
-              {esEnvio ? (
-                <>
-                  <strong>Acepta y envía</strong>: nos llega al instante y te lo
-                  devolvemos firmado.
-                </>
-              ) : (
-                <>
-                  <strong>Revísalo y envíalo nuevamente</strong> a la Fundación.
-                </>
-              )}
-            </div>
-          </div>
-        </div>
-
-        <div className="aviso-privacidad">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
-          </svg>
-          <span>
-            {esEnvio ? (
-              <>
-                El documento se rellena aquí mismo, en tu navegador. Al pulsar
-                enviar, el PDF se remite únicamente a Fundación Íntegra: se
-                convierte en un servicio seguro (Unión Europea) que no conserva
-                ninguna copia, y tus datos no se usan para nada más.
-              </>
-            ) : esPdf ? (
-              <>
-                El documento se rellena aquí mismo, en tu navegador. Para
-                entregártelo en PDF, se convierte en un servicio de conversión
-                seguro (Unión Europea) y no se conserva ninguna copia.
-              </>
-            ) : (
-              <>
-                Tus datos no salen de tu ordenador: el documento se genera aquí
-                mismo, en tu navegador. No se envía nada a ningún servidor.
-              </>
-            )}
-          </span>
-        </div>
-
-        <main className="publico-main">
-          <ConvenioPublicoForm
-            codigo={codigo}
-            valoresIniciales={valoresIniciales}
-            fijados={fijados}
-          />
-        </main>
-
-        <footer className="publico-footer">
-          Fundación Íntegra · Paseo de la Castellana 86, 2ª pl., 28046 Madrid ·{' '}
-          <a href="https://fundacionintegra.org" target="_blank" rel="noopener noreferrer">
-            fundacionintegra.org
-          </a>
-        </footer>
-      </div>
-    </>
-  );
+  return <PantallaConvenio tipo={tipo} fijados={fijados} />;
 }

@@ -19,10 +19,13 @@ import { MARCA } from "@/lib/marca";
 export default function Shell({
   grupo,
   codigo,
+  seccion,
   children,
 }: {
   grupo?: GrupoConvenioId;
   codigo?: string;
+  /** Última miga para pantallas que no son grupo/plantilla (p. ej. "Enlaces"). */
+  seccion?: string;
   children: React.ReactNode;
 }) {
   const grupoActual = grupo
@@ -77,6 +80,9 @@ export default function Shell({
         </div>
 
         <div className="sidebar-footer">
+          <Link href="/convenios/enlaces" className="sidebar-link">
+            Enlaces generados →
+          </Link>
           <button className="logout-btn" onClick={cerrarSesionConvenios}>
             Cerrar sesión
           </button>
@@ -96,7 +102,7 @@ export default function Shell({
             flexWrap: "wrap",
           }}
         >
-          {grupoActual || tipo ? (
+          {grupoActual || tipo || seccion ? (
             <Link href="/convenios" style={migaStyle(false)}>
               Convenios
             </Link>
@@ -123,6 +129,12 @@ export default function Shell({
               <span style={migaStyle(true)}>
                 {tipo.codigo} · {tipo.label}
               </span>
+            </>
+          )}
+          {seccion && (
+            <>
+              <span style={{ opacity: 0.4 }}>›</span>
+              <span style={migaStyle(true)}>{seccion}</span>
             </>
           )}
         </div>

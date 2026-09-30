@@ -451,3 +451,29 @@ select:focus-visible, textarea:focus-visible {
   display: flex; align-items: center; justify-content: center;
 }
 .modal-tic svg { width: 28px; height: 28px; }
+
+/* ─── Pantalla de seguimiento de enlaces (/convenios/enlaces) ─── */
+.tabla-enlaces {
+  width: 100%; border-collapse: collapse; font-size: 14px;
+}
+.tabla-enlaces th {
+  text-align: left; font-weight: 500; font-size: 12px; letter-spacing: 0.04em;
+  text-transform: uppercase; color: var(--text-muted);
+  padding: 0 12px 10px; border-bottom: 1px solid var(--border); white-space: nowrap;
+}
+.tabla-enlaces td {
+  padding: 12px; border-bottom: 1px solid var(--border); vertical-align: top;
+}
+.tabla-enlaces tr:last-child td { border-bottom: none; }
+.tabla-enlaces tr:hover td { background: #FAFAFB; }
+
+.badge-estado {
+  display: inline-block; padding: 3px 10px; border-radius: 999px;
+  font-size: 12px; font-weight: 500; white-space: nowrap;
+}
+
+.sidebar-link {
+  display: block; color: rgba(255, 255, 255, 0.85); font-size: 13px;
+  text-decoration: none; margin-bottom: 14px; transition: color 0.15s;
+}
+.sidebar-link:hover { color: white; text-decoration: underline; }

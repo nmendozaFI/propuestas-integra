@@ -11,10 +11,13 @@ export default function ConvenioPublicoForm({
   codigo,
   valoresIniciales,
   fijados,
+  token,
 }: {
   codigo: string;
   valoresIniciales?: Record<string, string>;
   fijados?: Record<string, string>;
+  /** Token del enlace de un solo uso. Solo llega desde /convenio/t/[token]. */
+  token?: string;
 }) {
   const tipo = getTipoConvenio(codigo);
   // En la ruta pública, las plantillas marcadas descargan PDF (no editable).
@@ -31,6 +34,7 @@ export default function ConvenioPublicoForm({
       fijadosReadOnly
       salida={salida}
       modo={modo}
+      token={token}
     />
   );
 }

@@ -117,6 +117,7 @@ export default function FormularioConvenio({
   fijadosReadOnly = false,
   salida = "word",
   modo = "descarga",
+  token,
 }: {
   codigo: string;
   cargarBytes: () => Promise<Uint8Array>;
@@ -130,6 +131,9 @@ export default function FormularioConvenio({
   salida?: "word" | "pdf";
   /** 'envio' sustituye la descarga por revisar el PDF y enviarlo a la Fundación. */
   modo?: "descarga" | "envio";
+  /** Token del enlace de un solo uso (ruta /convenio/t/[token]). El servidor lo
+   *  consume tras confirmar el correo, de modo que el enlace no vale dos veces. */
+  token?: string;
 }) {
   const tipo = getTipoConvenio(codigo);
 
@@ -386,6 +390,8 @@ export default function FormularioConvenio({
       fd.append("file", pdfBlob, `${base}.pdf`);
       fd.append("codigo", tipo.codigo);
       fd.append("datos", JSON.stringify(valores));
+      // Sin token el servidor rechaza el envío de las plantillas con flujoEnvio.
+      if (token) fd.append("token", token);
 
       const resp = await fetch("/api/convenio-enviar", {
         method: "POST",

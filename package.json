@@ -6,10 +6,12 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "db:migrar": "node --env-file=.env scripts/migrar.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.90.0",
+    "@neondatabase/serverless": "^1.1.0",
     "cloudconvert": "^3.0.0",
     "cloudinary": "^2.10.0",
     "docx": "^9.6.1",
